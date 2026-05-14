@@ -1,4 +1,4 @@
-
+import { createClient } from '@supabase/supabase-js'
 import { useEffect, useMemo, useState } from 'react'
 import JSZip from 'jszip'
 import initSqlJs from 'sql.js'
@@ -8,7 +8,10 @@ import {
   CheckCircle2, Eye, CalendarDays, ListChecks, Clock, Settings, ImageIcon,
   Brain, BarChart3, Plus
 } from 'lucide-react'
-
+const supabase = createClient(
+  'https://lgmfmdpzmqunouysuwjp.supabase.co',
+  'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7'
+)
 const DAY = 24 * 60 * 60 * 1000
 
 const DEFAULT_CONFIG = {
