@@ -330,10 +330,18 @@ function RichTextEditor({ value, onChange }) {
     editorRef.current?.focus()
   }
 
+  function insertSymbol(symbol) {
+    editorRef.current?.focus()
+    document.execCommand('insertText', false, symbol)
+    emitChange()
+  }
+
   return (
     <div className="rich-editor">
       <div className="rich-toolbar">
         <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); runCommand('bold') }}>B</button>
+        <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('≥') }}>≥</button>
+        <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('≤') }}>≤</button>
         {['#111827', '#2563eb', '#b42318', '#167047'].map(color => (
           <button
             type="button"
