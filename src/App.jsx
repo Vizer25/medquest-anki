@@ -1770,10 +1770,13 @@ export default function App() {
 
                   {!editing && (
                     <div className="answer-entry">
-                      <div className="answer-tools">
-                        <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Alt + .">≥</button>
-                        <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Alt + ,">≤</button>
-                      </div>
+                      <details className="answer-tools">
+                        <summary title="Ferramentas da resposta">Aa</summary>
+                        <div className="answer-tool-popover">
+                          <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Alt + .">≥</button>
+                          <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Alt + ,">≤</button>
+                        </div>
+                      </details>
                       <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={handleAnswerKeyDown} readOnly={currentAlreadyAnswered} placeholder="Digite sua resposta aqui..." />
                     </div>
                   )}

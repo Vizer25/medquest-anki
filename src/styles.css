@@ -61,6 +61,7 @@ h1{font-size:48px;color:#101828;margin:0}
 textarea{min-height:150px;resize:vertical}
 .study-workspace{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch}
 .study-main,.answer-panel{min-width:0;background:white;border:2px solid #e5e7eb;border-radius:14px;padding:12px;min-height:255px}
+.study-main{display:flex;flex-direction:column}
 .answer-panel{position:sticky;top:12px}
 .answer-panel.result.good{background:#d1fadf;border-color:#00c853}
 .answer-panel.result.medium{background:#fff1a6;border-color:#f59e0b}
@@ -84,11 +85,14 @@ textarea{min-height:150px;resize:vertical}
 .answer-panel .feedback.good{background:#d1fadf;border-color:#00c853;color:#05603a}
 .answer-panel .feedback.medium{background:#fff1a6;border-color:#f59e0b;color:#92400e}
 .answer-panel .feedback.bad{background:#ffd7d2;border-color:#ef4444;color:#991b1b}
-.answer-entry{display:grid;gap:6px}
-.answer-entry textarea{height:155px;min-height:130px;max-height:210px;font-size:17px;line-height:1.45;padding:12px 14px;margin:4px 0 8px;border:0;box-shadow:none}
+.answer-entry{position:relative;display:flex;flex:1;min-height:0}
+.answer-entry textarea{flex:1;height:auto;min-height:190px;max-height:none;font-size:17px;line-height:1.45;padding:10px 48px 10px 12px;margin:0 0 8px;border:0;box-shadow:none}
 .answer-entry textarea:focus{box-shadow:none;border-color:#e5e7eb}
-.answer-tools{display:flex;gap:6px;justify-content:flex-end}
-.answer-tools button{width:30px;height:28px;padding:0;justify-content:center;font-size:17px;border-radius:7px;background:#f2f4f7;color:#101828;border:1px solid #e5e7eb}
+.answer-tools{position:absolute;right:8px;top:8px;z-index:2}
+.answer-tools summary{list-style:none;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:#f2f4f7;color:#344054;border:1px solid #e5e7eb;font-size:12px;font-weight:900;cursor:pointer}
+.answer-tools summary::-webkit-details-marker{display:none}
+.answer-tool-popover{position:absolute;right:0;top:34px;display:flex;gap:6px;background:white;border:1px solid #e5e7eb;border-radius:10px;padding:6px;box-shadow:0 12px 35px #10182818}
+.answer-tool-popover button{width:30px;height:28px;padding:0;justify-content:center;font-size:16px;border-radius:7px;background:#f2f4f7;color:#101828;border:1px solid #e5e7eb}
 .pill,.timer-chip{display:inline-flex;align-items:center;justify-content:center;min-width:72px;background:white;border:1px solid #e5e7eb;padding:7px 12px;border-radius:999px;color:#101828;font-weight:900}
 .timer-chip{justify-self:center;background:#f8fafc;color:#2563eb;border-color:#dbe4f0}
 .challenge-timer{justify-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:72px;background:#fee2e2;color:#991b1b;border:1px solid #ef4444;padding:8px 14px;border-radius:999px;font-weight:950;box-shadow:0 0 0 4px #ef44441a}
