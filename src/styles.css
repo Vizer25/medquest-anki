@@ -10,6 +10,8 @@ body{margin:0;min-height:100vh;background:#f8fafc}
 .login-card p{font-size:18px;color:#667085}
 input,textarea{width:100%;font-size:20px;border:2px solid #e5e7eb;border-radius:12px;padding:18px 20px;outline:none;margin:10px 0;background:white}
 input:focus,textarea:focus{border-color:#2563eb;box-shadow:0 0 0 4px #2563eb18}
+select{font-size:16px;border:1px solid #e5e7eb;border-radius:10px;padding:12px;background:white;color:#101828;outline:none}
+select:focus{border-color:#2563eb;box-shadow:0 0 0 4px #2563eb18}
 button,.import{border:0;background:#2563eb;color:white;padding:15px 22px;border-radius:10px;font-weight:800;font-size:17px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .login-card button{width:100%;justify-content:center;margin-top:8px}
 .alert,.feedback{margin-top:20px;padding:16px;border-radius:14px;font-weight:800}
@@ -146,4 +148,36 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
 .search-input{
   margin-bottom:12px;
+}
+.study-filters{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:end;
+  gap:12px;
+  margin-bottom:18px;
+}
+.study-filters label{
+  display:grid;
+  gap:6px;
+  color:#667085;
+  font-weight:800;
+}
+.tag-cloud{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:6px 0 16px;
+}
+.tag-cloud button{
+  background:#f2f4f7;
+  color:#344054;
+  border:1px solid #e5e7eb;
+  border-radius:999px;
+  padding:8px 12px;
+  font-size:14px;
+}
+.tag-cloud button.active{
+  background:#2563eb;
+  color:white;
+  border-color:#2563eb;
 }

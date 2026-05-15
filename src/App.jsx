@@ -419,6 +419,8 @@ export default function App() {
   const [cardSeconds, setCardSeconds] = useState(0)
   const [importLog, setImportLog] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
+  const [studyTag, setStudyTag] = useState('')
+  const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
 
@@ -512,7 +514,23 @@ export default function App() {
     return () => { active = false }
   }, [])
 
-  const dueCards = useMemo(() => cards.filter(c => !c.dueAt || c.dueAt <= Date.now()), [cards])
+  const allTags = useMemo(() => {
+    const tags = new Set()
+    cards.forEach(card => {
+      String(card.tags || '').split(/\s+/).map(t => t.trim()).filter(Boolean).forEach(t => tags.add(t))
+    })
+    return Array.from(tags).sort((a, b) => a.localeCompare(b))
+  }, [cards])
+  const focusedCards = useMemo(() => {
+    const ids = new Set(focusedCardIds)
+    return cards.filter(c => ids.has(c.id))
+  }, [cards, focusedCardIds])
+  const dueCards = useMemo(() => {
+    const base = focusedCards.length
+      ? focusedCards
+      : cards.filter(c => !studyTag || String(c.tags || '').split(/\s+/).includes(studyTag))
+    return focusedCards.length ? base : base.filter(c => !c.dueAt || c.dueAt <= Date.now())
+  }, [cards, focusedCards, studyTag])
   const current = dueCards.length ? dueCards[index % dueCards.length] : null
   const currentView = current ? getCardView(current) : null
   const todayDone = stats.daily?.[todayKey()] || 0
@@ -960,6 +978,27 @@ export default function App() {
     setEditing(false)
   }
 
+  function studySingleCard(cardId) {
+    setFocusedCardIds([cardId])
+    setStudyTag('')
+    setIndex(0)
+    setAnswer('')
+    setFeedback(null)
+    setPendingGrade(null)
+    setEditing(false)
+    setTab('study')
+  }
+
+  function clearStudyFilter() {
+    setFocusedCardIds([])
+    setStudyTag('')
+    setIndex(0)
+    setAnswer('')
+    setFeedback(null)
+    setPendingGrade(null)
+    setEditing(false)
+  }
+
   function tsvCell(value) {
     return String(value || '')
       .replace(/\t/g, ' ')
@@ -1139,6 +1178,31 @@ export default function App() {
 
       {tab === 'study' && (
         <section className="card">
+          <div className="study-filters">
+            <label>
+              Revisar tag
+              <select
+                value={studyTag}
+                onChange={e => {
+                  setStudyTag(e.target.value)
+                  setFocusedCardIds([])
+                  setIndex(0)
+                  setAnswer('')
+                  setFeedback(null)
+                  setPendingGrade(null)
+                  setEditing(false)
+                }}
+              >
+                <option value="">Todos os cards vencidos</option>
+                {allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+              </select>
+            </label>
+            {(studyTag || focusedCardIds.length > 0) && (
+              <button className="secondary" onClick={clearStudyFilter}>Limpar filtro</button>
+            )}
+          </div>
+          {studyTag && <p className="hint">Revisando apenas cards vencidos com a tag: <b>{studyTag}</b>.</p>}
+          {focusedCardIds.length > 0 && <p className="hint">Revisando card selecionado manualmente.</p>}
           {!current ? (
             <div className="empty">
               <h2>Nenhum card vencido agora.</h2>
@@ -1198,6 +1262,22 @@ export default function App() {
             placeholder="Buscar flashcard por pergunta, resposta ou tag..."
             className="search-input"
           />
+          <div className="tag-cloud">
+            {allTags.map(tag => (
+              <button
+                className={studyTag === tag ? 'active' : ''}
+                key={tag}
+                onClick={() => {
+                  setStudyTag(tag)
+                  setFocusedCardIds([])
+                  setIndex(0)
+                  setTab('study')
+                }}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
           <p className="hint">{filteredCards.length} de {cards.length} flashcards encontrados.</p>
           <div className="grid-cards">
             {filteredCards.map((c, i) => {
@@ -1207,6 +1287,7 @@ export default function App() {
                   <b>{i+1}. {v.pergunta}</b>
                   <div dangerouslySetInnerHTML={{__html: v.htmlFront || v.pergunta}} />
                   <p><b>Resposta:</b> {v.resposta}</p>
+                  <button className="secondary" onClick={() => studySingleCard(c.id)}>Revisar este card</button>
                   <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.reps || 0} | Acertos: {v.correctCount || 0} | Próxima revisão: {new Date(v.dueAt || Date.now()).toLocaleString('pt-BR')}</small>
                 </div>
               )
