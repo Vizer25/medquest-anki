@@ -191,8 +191,19 @@ function parseCSV(text) {
 
 function replaceMedia(html, mediaMap) {
   return String(html || '').replace(/src=["']([^"']+)["']/g, (match, filename) => {
-    const cleanName = decodeURIComponent(filename).split('/').pop()
-    return mediaMap[cleanName] ? `src="${mediaMap[cleanName]}"` : match
+    const decodedName = decodeURIComponent(filename)
+    const cleanName = decodedName.split('/').pop()
+    const mediaSrc = mediaMap[decodedName] || mediaMap[cleanName] || mediaMap[filename]
+    return mediaSrc ? `src="${mediaSrc}"` : match
+  })
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
   })
 }
 
@@ -224,7 +235,10 @@ async function buildMediaMap(zip) {
     const file = zip.file(zipName)
     if (!file) continue
     const blob = await file.async('blob')
-    map[realName] = URL.createObjectURL(new Blob([blob], { type: mimeFor(realName) }))
+    const dataUrl = await blobToDataUrl(new Blob([blob], { type: mimeFor(realName) }))
+    const cleanName = String(realName).split('/').pop()
+    map[realName] = dataUrl
+    map[cleanName] = dataUrl
   }
 
   return map
