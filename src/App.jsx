@@ -1642,7 +1642,6 @@ export default function App() {
       <main className="login-page">
         <section className="login-card">
           <img src="/medquest-logo.png" alt="MedQuest" className="login-logo" />
-          <p>Entre com sua conta para sincronizar os flashcards em todos os dispositivos.</p>
           <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Email" type="email" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <button onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
