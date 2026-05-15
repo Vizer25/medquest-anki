@@ -438,6 +438,10 @@ export default function App() {
   const dailyValues = Object.entries(stats.daily || {}).slice(-14)
   const maxDaily = Math.max(1, ...dailyValues.map(([, value]) => Number(value || 0)))
   const progress = Math.min(100, Number(stats.xp || 0) % 100)
+  const currentAlreadyAnswered = !!current && (
+    pendingGrade?.cardId === current.id ||
+    feedback?.cardId === current.id
+  )
   const filteredCards = cards.filter(c => {
     const q = normalize(searchTerm)
     if (!q) return true
@@ -668,6 +672,7 @@ export default function App() {
 
   function evaluate() {
     if (!current) return
+    if (currentAlreadyAnswered) return
 
     const cardForAnswer = getCardView(current)
     const userText = normalize(answer)
@@ -848,9 +853,10 @@ export default function App() {
 
   function saveEdit() {
     if (!current) return
+    const editingCardId = current.id
     const pergunta = stripHtml(editFront)
     const resposta = stripHtml(editBack)
-    setCards(prev => prev.map(c => c.id === current.id ? {
+    setCards(prev => prev.map(c => c.id === editingCardId ? {
       ...c,
       pergunta,
       resposta,
@@ -858,7 +864,12 @@ export default function App() {
       htmlBack: editBack,
       palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
     } : c))
-    setFeedback(null)
+    if (feedback?.cardId === editingCardId) {
+      setFeedback(prev => prev ? {
+        ...prev,
+        expected: resposta || stripHtml(editBack)
+      } : prev)
+    }
     setEditing(false)
   }
 
@@ -1037,7 +1048,7 @@ export default function App() {
 
               {!editing && <textarea value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Digite sua resposta aqui..." />}
               <div className="actions">
-                <button onClick={evaluate} disabled={!!feedback || editing}><CheckCircle2 size={18}/> Responder</button>
+                <button onClick={evaluate} disabled={currentAlreadyAnswered || editing}><CheckCircle2 size={18}/> Responder</button>
                 <button className="secondary" onClick={nextCard}>Próximo</button>
                 <button className="secondary" onClick={goToLastAnswered} disabled={!lastAnsweredId}>Voltar último</button>
                 <button className="secondary" onClick={startEdit}>Editar card</button>
