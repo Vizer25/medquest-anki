@@ -70,6 +70,10 @@ textarea{min-height:150px;resize:vertical}
 .answer-panel.result.good{background:#e7f6ef;border-color:#2f9e67}
 .answer-panel.result.medium{background:#fff4cf;border-color:#d99a1b}
 .answer-panel.result.bad{background:#fde7e5;border-color:#d6453d}
+.result-dot{position:absolute;right:10px;top:10px;width:10px;height:10px;padding:0;border-radius:999px;border:0;box-shadow:0 0 0 2px #ffffffb8;opacity:.7}
+.result-dot:hover{opacity:1;transform:scale(1.25)}
+.result-dot-correct{background:#168a4a}
+.result-dot-wrong{background:#c9342c}
 .actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:14px}
 .study-card .actions{margin-top:8px;gap:8px}
 .study-card .actions button{padding:9px 12px;font-size:14px;white-space:nowrap}

@@ -1330,6 +1330,60 @@ export default function App() {
     })
   }
 
+  function markCurrentAsWrong() {
+    if (!current || !feedback || feedback.cardId !== current.id) return
+    const previousGrade = feedback.grade || pendingGrade?.grade || 'good'
+    const wasCorrect = feedback.percent >= 80
+    const correctedGrade = 'again'
+
+    setPendingGrade({ cardId: current.id, grade: correctedGrade })
+    setFeedback(prev => prev ? {
+      ...prev,
+      type: 'bad',
+      grade: correctedGrade,
+      percent: Math.min(Number(prev.percent || 0), 59),
+      text: `Marcado manualmente como erro. Resultado anterior: ${prev.percent}%.`,
+      scheduleLabel: '10 minutos'
+    } : prev)
+
+    setStats(prevRaw => {
+      const prev = safeStats(prevRaw)
+      const history = [...(prev.history || [])]
+      const lastIndex = history.map(item => item.id).lastIndexOf(current.id)
+      if (lastIndex >= 0) {
+        history[lastIndex] = {
+          ...history[lastIndex],
+          percent: Math.min(Number(history[lastIndex].percent || 0), 59),
+          grade: correctedGrade,
+          correct: false,
+          manuallyCorrected: true
+        }
+      }
+      const byGrade = { ...prev.byGrade }
+      if (byGrade[previousGrade] > 0) byGrade[previousGrade] -= 1
+      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + (wasCorrect ? 1 : 0)
+
+      return {
+        ...prev,
+        correct: Math.max(0, (prev.correct || 0) - (wasCorrect ? 1 : 0)),
+        wrong: (prev.wrong || 0) + (wasCorrect ? 1 : 0),
+        streak: wasCorrect ? 0 : prev.streak,
+        history,
+        masteryByCard: {
+          ...(prev.masteryByCard || {}),
+          [current.id]: {
+            ...(prev.masteryByCard?.[current.id] || {}),
+            lastPercent: 59,
+            lastGrade: correctedGrade,
+            manuallyCorrected: true,
+            updatedAt: new Date().toISOString()
+          }
+        },
+        byGrade
+      }
+    })
+  }
+
   function goToLastAnswered() {
     if (!lastAnsweredId) return
     const updated = cards.map(c => c.id === lastAnsweredId ? { ...c, dueAt: Date.now() } : c)
@@ -1784,16 +1838,20 @@ export default function App() {
                     <button className="secondary" onClick={nextCard} title="Ctrl + Enter depois de responder">Próximo</button>
                     <button className="secondary" onClick={goToLastAnswered} disabled={!lastAnsweredId} title="Voltar ao último card respondido">Voltar último</button>
                     <button className="secondary" onClick={startEdit} title="Editar este card">Editar card</button>
-                    {feedback && feedback.cardId === current.id && feedback.percent < 80 && (
-                      <button className="secondary" onClick={markCurrentAsCorrect} title="Ctrl + M"><CheckCircle2 size={18}/> Marcar acerto</button>
-                    )}
                   </div>
                 </div>
                 <aside className={`answer-panel ${feedback && feedback.cardId === current.id ? `result ${feedback.type}` : ''}`}>
                   {feedback && feedback.cardId === current.id ? (
-                    <div className="answer-box">
-                      <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
-                    </div>
+                    <>
+                      {feedback.percent >= 80 ? (
+                        <button className="result-dot result-dot-wrong" onClick={markCurrentAsWrong} title="Marcar como erro" aria-label="Marcar como erro" type="button" />
+                      ) : (
+                        <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + M)" aria-label="Marcar como acerto" type="button" />
+                      )}
+                      <div className="answer-box">
+                        <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
+                      </div>
+                    </>
                   ) : (
                     <div className="answer-placeholder" />
                   )}
