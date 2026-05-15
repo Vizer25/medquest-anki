@@ -36,6 +36,7 @@ const DEFAULT_STATS = {
   totalAnswerSeconds: 0,
   fastestSeconds: null,
   slowestSeconds: 0,
+  masteryByCard: {},
   byGrade: { again: 0, hard: 0, good: 0, easy: 0 }
 }
 
@@ -144,6 +145,7 @@ function safeStats(raw) {
     ...s,
     daily: s.daily && typeof s.daily === 'object' ? s.daily : {},
     history: Array.isArray(s.history) ? s.history : [],
+    masteryByCard: s.masteryByCard && typeof s.masteryByCard === 'object' ? s.masteryByCard : {},
     byGrade: { ...DEFAULT_STATS.byGrade, ...(s.byGrade || {}) }
   }
 }
@@ -591,6 +593,17 @@ export default function App() {
   const dailyValues = Object.entries(stats.daily || {}).slice(-14)
   const maxDaily = Math.max(1, ...dailyValues.map(([, value]) => Number(value || 0)))
   const progress = Math.min(100, Number(stats.xp || 0) % 100)
+  const masteryEntries = cards.map(card => Number(stats.masteryByCard?.[card.id]?.bestPercent || 0))
+  const masteryAverage = cards.length ? Math.round(masteryEntries.reduce((sum, value) => sum + value, 0) / cards.length) : 0
+  const masteredCount = masteryEntries.filter(value => value >= 80).length
+  const partialCount = masteryEntries.filter(value => value >= 60 && value < 80).length
+  const weakCount = Math.max(0, cards.length - masteredCount - partialCount)
+  const masteryGap = Math.max(0, 80 - masteryAverage)
+  const recentHistory = (stats.history || []).slice(-50)
+  const previousHistory = (stats.history || []).slice(-100, -50)
+  const recentAverage = recentHistory.length ? Math.round(recentHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / recentHistory.length) : 0
+  const previousAverage = previousHistory.length ? Math.round(previousHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / previousHistory.length) : null
+  const recentTrend = previousAverage == null ? null : recentAverage - previousAverage
   const currentAlreadyAnswered = !!current && (
     pendingGrade?.cardId === current.id ||
     feedback?.cardId === current.id
@@ -612,6 +625,7 @@ export default function App() {
         <div><Clock/><span>Tempo</span><b>{formatTime(cardSeconds)}</b></div>
         <div><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
         <div><ImageIcon/><span>Total no deck</span><b>{cards.length}</b></div>
+        <div><Target/><span>Domínio do deck</span><b>{masteryAverage}%</b></div>
         <div><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
       </section>
       <div className="bar"><div style={{width: `${progress}%`}} /></div>
@@ -884,6 +898,15 @@ export default function App() {
         streak: newStreak,
         record: Math.max(prev.record || 0, newStreak),
         history: [...(prev.history || []), historyItem].slice(-500),
+        masteryByCard: {
+          ...(prev.masteryByCard || {}),
+          [current.id]: {
+            bestPercent: Math.max(Number(prev.masteryByCard?.[current.id]?.bestPercent || 0), percent),
+            lastPercent: percent,
+            lastGrade: grade,
+            updatedAt: new Date().toISOString()
+          }
+        },
         totalAnswerSeconds: (prev.totalAnswerSeconds || 0) + cardSeconds,
         fastestSeconds: prev.fastestSeconds == null ? cardSeconds : Math.min(prev.fastestSeconds, cardSeconds),
         slowestSeconds: Math.max(prev.slowestSeconds || 0, cardSeconds),
@@ -1395,6 +1418,30 @@ export default function App() {
       {tab === 'stats' && (
         <section className="card">
           <h2>Estatísticas avançadas</h2>
+          <div className="mastery-panel">
+            <div className="mastery-head">
+              <div>
+                <span>Domínio geral do deck</span>
+                <b>{masteryAverage}%</b>
+              </div>
+              <strong>Meta: 80%</strong>
+            </div>
+            <div className="mastery-track">
+              <i style={{width: `${Math.min(100, masteryAverage)}%`}} />
+              <em style={{left: '80%'}} />
+            </div>
+            <p className="hint">
+              {masteryGap === 0
+                ? 'Você já está acima da meta de domínio de 80% do conteúdo.'
+                : `Faltam ${masteryGap} pontos percentuais para atingir 80% de domínio geral.`}
+              {recentTrend != null && ` Nas últimas 50 respostas, sua média ficou em ${recentAverage}% (${recentTrend >= 0 ? '+' : ''}${recentTrend} pontos vs. as 50 anteriores).`}
+            </p>
+            <div className="mastery-breakdown">
+              <div><b>{masteredCount}</b><span>Cards dominados<br/>80-100%</span></div>
+              <div><b>{partialCount}</b><span>Em progresso<br/>60-79%</span></div>
+              <div><b>{weakCount}</b><span>Prioridade<br/>0-59%</span></div>
+            </div>
+          </div>
           <div className="advanced-grid">
             <div className="advanced-box"><span>Precisão geral</span><b>{accuracy}%</b><small>{stats.correct} acertos de {totalAnswered}</small></div>
             <div className="advanced-box"><span>Tempo médio</span><b>{formatTime(avgTime)}</b><small>Total: {formatTime(stats.totalAnswerSeconds)}</small></div>

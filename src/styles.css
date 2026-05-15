@@ -64,6 +64,18 @@ textarea{min-height:160px;resize:vertical}
 .advanced-box span{display:block;color:#667085;margin-bottom:8px}
 .advanced-box b,.grade-grid b{font-size:32px;color:#2563eb}
 .advanced-box small{display:block;color:#667085;margin-top:8px}
+.mastery-panel{background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:22px;margin:18px 0 24px}
+.mastery-head{display:flex;justify-content:space-between;gap:16px;align-items:end}
+.mastery-head span{display:block;color:#667085;font-weight:800;margin-bottom:6px}
+.mastery-head b{font-size:44px;color:#101828}
+.mastery-head strong{color:#2563eb}
+.mastery-track{height:18px;background:white;border:1px solid #e5e7eb;border-radius:999px;position:relative;overflow:hidden;margin-top:16px}
+.mastery-track i{display:block;height:100%;background:#2563eb;border-radius:999px}
+.mastery-track em{position:absolute;top:-4px;width:3px;height:26px;background:#12b76a}
+.mastery-breakdown{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
+.mastery-breakdown div{background:white;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+.mastery-breakdown b{display:block;font-size:30px;color:#2563eb}
+.mastery-breakdown span{color:#667085;font-weight:800}
 .daily-chart,.history-list{display:grid;gap:10px;margin:14px 0 26px}
 .day-row{display:grid;grid-template-columns:60px 1fr 45px;align-items:center;gap:12px}
 .day-bar{height:18px;background:#f2f4f7;border-radius:999px;overflow:hidden}
