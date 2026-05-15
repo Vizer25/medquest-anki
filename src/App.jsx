@@ -1263,7 +1263,7 @@ export default function App() {
       return
     }
 
-    if (!event.altKey) return
+    if (!(event.ctrlKey || event.metaKey)) return
     if (event.key === '.' || event.key === '>') {
       event.preventDefault()
       insertAnswerSymbol('≥')
@@ -1826,8 +1826,8 @@ export default function App() {
                       <details className="answer-tools">
                         <summary title="Ferramentas da resposta">Aa</summary>
                         <div className="answer-tool-popover">
-                          <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Alt + .">≥</button>
-                          <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Alt + ,">≤</button>
+                          <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Ctrl + .">≥</button>
+                          <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Ctrl + ,">≤</button>
                         </div>
                       </details>
                       <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={handleAnswerKeyDown} readOnly={currentAlreadyAnswered} placeholder="Digite sua resposta aqui..." />
