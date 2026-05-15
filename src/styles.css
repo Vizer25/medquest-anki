@@ -96,6 +96,53 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .edit-box textarea{
   min-height:110px;
 }
+.rich-editor{
+  background:white;
+  border:1px solid #e5e7eb;
+  border-radius:12px;
+  margin:10px 0;
+  overflow:hidden;
+}
+.rich-toolbar{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px;
+  border-bottom:1px solid #e5e7eb;
+  background:#f9fafb;
+}
+.tool-button{
+  width:34px;
+  height:34px;
+  justify-content:center;
+  padding:0;
+  border-radius:8px;
+  background:white;
+  color:#101828;
+  border:1px solid #d0d5dd;
+  font-size:18px;
+}
+.color-button{
+  width:28px;
+  height:28px;
+  padding:0;
+  border-radius:999px;
+  border:2px solid white;
+  box-shadow:0 0 0 1px #d0d5dd;
+}
+.rich-input{
+  min-height:130px;
+  padding:16px 18px;
+  outline:none;
+  font-size:20px;
+  line-height:1.5;
+}
+.rich-input:focus{
+  box-shadow:inset 0 0 0 2px #2563eb;
+}
+.rich-input p,.rich-input div{
+  margin:0 0 10px;
+}
 
 .search-input{
   margin-bottom:12px;

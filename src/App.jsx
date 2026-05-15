@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import initSqlJs from 'sql.js'
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
@@ -306,6 +306,54 @@ function getCardView(card) {
       .filter(w => w.length > 2)
       .slice(0, 12)
   }
+}
+
+function RichTextEditor({ value, onChange }) {
+  const editorRef = useRef(null)
+  const lastHtmlRef = useRef(null)
+
+  useEffect(() => {
+    if (!editorRef.current || value === lastHtmlRef.current) return
+    editorRef.current.innerHTML = value || ''
+    lastHtmlRef.current = value || ''
+  }, [value])
+
+  function emitChange() {
+    const html = editorRef.current?.innerHTML || ''
+    lastHtmlRef.current = html
+    onChange(html)
+  }
+
+  function runCommand(command, option = null) {
+    document.execCommand(command, false, option)
+    emitChange()
+    editorRef.current?.focus()
+  }
+
+  return (
+    <div className="rich-editor">
+      <div className="rich-toolbar">
+        <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); runCommand('bold') }}>B</button>
+        {['#111827', '#2563eb', '#b42318', '#167047'].map(color => (
+          <button
+            type="button"
+            aria-label={`Cor ${color}`}
+            className="color-button"
+            key={color}
+            style={{ background: color }}
+            onMouseDown={e => { e.preventDefault(); runCommand('foreColor', color) }}
+          />
+        ))}
+      </div>
+      <div
+        ref={editorRef}
+        className="rich-input"
+        contentEditable
+        suppressContentEditableWarning
+        onInput={emitChange}
+      />
+    </div>
+  )
 }
 
 
@@ -1036,9 +1084,9 @@ export default function App() {
                 <div className="edit-box">
                   <h3>Editar card</h3>
                   <label>Frente/pergunta</label>
-                  <textarea value={editFront} onChange={e=>setEditFront(e.target.value)} />
+                  <RichTextEditor value={editFront} onChange={setEditFront} />
                   <label>Resposta/gabarito</label>
-                  <textarea value={editBack} onChange={e=>setEditBack(e.target.value)} />
+                  <RichTextEditor value={editBack} onChange={setEditBack} />
                   <div className="actions">
                     <button onClick={saveEdit}>Salvar edição</button>
                     <button className="secondary" onClick={()=>setEditing(false)}>Cancelar</button>
