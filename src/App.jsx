@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 import initSqlJs from 'sql.js'
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import {
-  Trophy, XCircle, Flame, Target, Star, LogOut, Lock, RotateCcw, Upload,
+  Trophy, XCircle, Flame, Target, Star, LogOut, RotateCcw, Upload,
   CheckCircle2, Eye, CalendarDays, ListChecks, Clock, Settings, ImageIcon,
   Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle, Scissors
 } from 'lucide-react'
@@ -1641,8 +1641,7 @@ export default function App() {
     return (
       <main className="login-page">
         <section className="login-card">
-          <div className="lock"><Lock size={34}/></div>
-          <h1>MedQuest</h1>
+          <img src="/medquest-logo.png" alt="MedQuest" className="login-logo" />
           <p>Entre com sua conta para sincronizar os flashcards em todos os dispositivos.</p>
           <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Email" type="email" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
@@ -1658,15 +1657,17 @@ export default function App() {
   return (
     <main className={`app ${tab === 'study' ? 'study-mode' : ''}`}>
       <header className="top">
-        <div>
-          <h1>MedQuest</h1>
+        <div className="brand">
+          <img src="/medquest-logo.png" alt="MedQuest" className="brand-logo" />
         </div>
         <div className="profile">
-          <span>{user?.email}</span>
+          <div className="profile-copy">
+            <span>{user?.email}</span>
+            {syncStatus && <small>{syncStatus}</small>}
+          </div>
           <button onClick={cloudLogout}><LogOut size={20}/> Sair</button>
         </div>
       </header>
-      {syncStatus && <div className="sync-status">{syncStatus}</div>}
       {importLog && (
         <div className={`import-status ${importLog.startsWith('Erro') || importLog.startsWith('Nao') ? 'bad' : 'good'}`}>
           {importLog}

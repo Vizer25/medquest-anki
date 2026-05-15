@@ -7,6 +7,7 @@ body{margin:0;min-height:100vh;background:#f8fafc}
 .login-card{width:min(430px,100%);background:white;padding:30px;border-radius:14px;box-shadow:0 18px 45px #10182812;text-align:left;border:1px solid #e5e7eb}
 .lock{width:48px;height:48px;margin:0 auto 18px;border-radius:12px;display:grid;place-items:center;background:#eff6ff;color:#2563eb}
 .lock svg{width:24px;height:24px}
+.login-logo{display:block;width:250px;max-width:100%;height:auto;margin:0 auto 18px;mix-blend-mode:multiply}
 .login-card h1{font-size:30px;line-height:1.15;color:#101828;margin:0 0 8px;text-align:center}
 .login-card p{font-size:15px;line-height:1.45;color:#667085;margin:0 0 22px}
 .login-card input{font-size:15px;padding:13px 14px;border-radius:10px;margin:8px 0}
@@ -25,9 +26,13 @@ button,.import{border:0;background:#2563eb;color:white;padding:15px 22px;border-
 .app{max-width:1320px;margin:0 auto;padding:52px 26px}
 .top{display:flex;justify-content:space-between;gap:24px;align-items:center;margin-bottom:24px}
 h1{font-size:48px;color:#101828;margin:0}
+.brand{display:flex;align-items:center;min-height:52px}
+.brand-logo{display:block;width:260px;max-width:44vw;height:auto;mix-blend-mode:multiply}
 .profile{background:white;border-radius:14px;padding:12px 16px;display:flex;align-items:center;gap:10px;box-shadow:0 12px 38px #1018280b;border:1px solid #e5e7eb}
 .profile svg{color:#2563eb}
+.profile-copy{display:grid;gap:2px;min-width:0}
 .profile span{color:#667085}
+.profile small{color:#98a2b3;font-size:12px;font-weight:800;line-height:1.1}
 .profile button{background:#f2f4f7;color:#101828}
 .sync-status{margin:-10px 0 24px;color:#667085;font-weight:800}
 .import-status{margin:-6px 0 20px;padding:16px 18px;border-radius:12px;font-weight:900}
@@ -278,8 +283,11 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .study-mode.app{padding-top:10px}
 .study-mode .top{margin-bottom:6px;align-items:flex-start}
 .study-mode h1{font-size:24px}
+.study-mode .brand{min-height:40px}
+.study-mode .brand-logo{width:190px}
 .study-mode .profile{padding:6px 8px;border-radius:10px;box-shadow:none;margin-top:4px}
 .study-mode .profile span{font-size:13px;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.study-mode .profile small{font-size:11px}
 .study-mode .profile button{padding:7px 9px;font-size:13px}
 .study-mode .sync-status{margin:0 0 8px;font-size:13px}
 .study-mode .import-status{margin:0 0 8px;padding:10px 12px;font-size:13px}
