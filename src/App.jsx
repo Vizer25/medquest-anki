@@ -1231,18 +1231,14 @@ export default function App() {
     const correctedGrade = 'good'
 
     setPendingGrade({ cardId: current.id, grade: correctedGrade })
-    setCards(prev => prev.map(card => card.id === current.id ? {
-      ...card,
-      correctCount: Math.max(Number(card.correctCount || 0), 1)
-    } : card))
-    const nextCorrectCount = Math.max(Number(current.correctCount || 0), 1) + 1
+    const nextCorrectCount = Number(current.correctCount || 0) + 1
     setFeedback(prev => prev ? {
       ...prev,
       type: 'good',
       grade: correctedGrade,
       percent: Math.max(Number(prev.percent || 0), 80),
       text: `Marcado manualmente como acerto. Resultado anterior: ${prev.percent}%.`,
-      scheduleLabel: nextCorrectCount === 2 ? '1 dia' : nextCorrectCount === 3 ? '1 semana' : nextCorrectCount === 4 ? '15 dias' : '1 mês'
+      scheduleLabel: nextCorrectCount === 1 ? '10 minutos' : nextCorrectCount === 2 ? '1 dia' : nextCorrectCount === 3 ? '1 semana' : nextCorrectCount === 4 ? '15 dias' : '1 mês'
     } : prev)
 
     setStats(prevRaw => {
