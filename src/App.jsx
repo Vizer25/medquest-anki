@@ -1118,6 +1118,7 @@ export default function App() {
       grade,
       percent,
       text: `Você acertou ${percent}% da resposta em ${formatTime(cardSeconds)}.`,
+      userAnswer: userText,
       expected: cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length ? cardForAnswer.clozeAnswers.join(' / ') : (cardForAnswer.resposta || stripHtml(cardForAnswer.htmlBack)),
       scheduleLabel
     })
@@ -1748,6 +1749,10 @@ export default function App() {
                       <div className="feedback-actions">
                         <div className="pill">Agendamento: {feedback.scheduleLabel}</div>
                         {feedback.percent < 80 && <button className="secondary" onClick={markCurrentAsCorrect} title="Ctrl + Shift + A"><CheckCircle2 size={18}/> Marcar como acerto</button>}
+                      </div>
+                      <div className="answer-box user-answer-box">
+                        <b>Sua resposta:</b>
+                        <p>{feedback.userAnswer || 'Sem resposta digitada.'}</p>
                       </div>
                       <div className="answer-box">
                         <b>Resposta esperada:</b>
