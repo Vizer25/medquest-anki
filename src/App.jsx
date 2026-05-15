@@ -173,7 +173,12 @@ const MEDICAL_ALIASES = [
 ]
 
 function canonicalizeMedicalText(text) {
-  let out = normalize(text)
+  let out = normalize(
+    String(text || '')
+      .replace(/\b(\d{1,3})\.(\d{3})\b/g, '$1$2')
+      .replace(/\b(\d+),(\d+)\b/g, '$1p$2')
+  )
+    .replace(/\b(\d+)\s+mil\b/g, (_, n) => String(Number(n) * 1000))
     .replace(/\b(\d+)\s*j\b/g, '$1 joule')
     .replace(/\b(\d+)\s*-\s*(\d+)\s*j\b/g, '$1 $2 joule')
 
@@ -224,7 +229,7 @@ function tokenMatches(expected, userTokens) {
 }
 
 function extractNumbers(text) {
-  return (canonicalizeMedicalText(text).match(/\b\d+(?:\.\d+)?\b/g) || []).map(Number)
+  return (canonicalizeMedicalText(text).match(/\b\d+(?:p\d+)?\b/g) || []).map(n => Number(n.replace('p', '.')))
 }
 
 function numberMatches(expected, userNumbers) {
@@ -245,10 +250,15 @@ function semanticScore(expectedText, userText) {
   if (canonicalizeMedicalText(userText).includes(canonicalizeMedicalText(expectedText))) return 100
   const hits = expectedTokens.filter(token => tokenMatches(token, userTokens)).length
   const conceptScore = hits / expectedTokens.length
+  const userRelevantHits = userTokens.filter(token => tokenMatches(token, expectedTokens)).length
+  const userCoverage = userTokens.length ? userRelevantHits / userTokens.length : 0
   const numberScore = expectedNumbers.length
     ? expectedNumbers.filter(number => numberMatches(number, userNumbers)).length / expectedNumbers.length
     : conceptScore
-  return Math.round(((conceptScore * 0.75) + (numberScore * 0.25)) * 100)
+  let score = ((conceptScore * 0.55) + (userCoverage * 0.25) + (numberScore * 0.20)) * 100
+  if (userTokens.length >= 3 && userCoverage >= 0.8 && numberScore >= 0.75) score = Math.max(score, 85)
+  if (userTokens.length >= 2 && userCoverage >= 0.9 && !expectedNumbers.length) score = Math.max(score, 82)
+  return Math.round(Math.min(100, score))
 }
 
 function splitCSVLine(line) {
@@ -351,6 +361,29 @@ function stableCardKey(card) {
   return normalize(`${card.noteId || ''} ${card.pergunta || ''} ${card.resposta || ''}`).slice(0, 240)
 }
 
+function imageTags(html) {
+  return String(html || '').match(/<img\b[^>]*>/gi) || []
+}
+
+function mergeMissingImages(existingHtml, importedHtml) {
+  const importedImages = imageTags(importedHtml)
+  if (!importedImages.length) return existingHtml
+
+  const existing = String(existingHtml || '')
+  const existingImages = imageTags(existing)
+  const hasBrokenBlob = /src=["']blob:/i.test(existing)
+  if (!existingImages.length || hasBrokenBlob) {
+    return `${existing}<br>${importedImages.join('<br>')}`
+  }
+
+  const missingImages = importedImages.filter(img => {
+    const src = img.match(/src=["']([^"']+)["']/i)?.[1]
+    return src && !existing.includes(src)
+  })
+
+  return missingImages.length ? `${existing}<br>${missingImages.join('<br>')}` : existing
+}
+
 function mergeImportedCards(oldCards, importedCards) {
   const oldById = new Map(oldCards.map(c => [String(c.id), c]))
   const oldByKey = new Map(oldCards.map(c => [stableCardKey(c), c]))
@@ -371,6 +404,8 @@ function mergeImportedCards(oldCards, importedCards) {
         if (existing.manualEditedAt) {
           merged[index] = {
             ...existing,
+            htmlFront: mergeMissingImages(existing.htmlFront, newCard.htmlFront),
+            htmlBack: mergeMissingImages(existing.htmlBack, newCard.htmlBack),
             tags: newCard.tags,
             cardType: newCard.cardType,
             interval: newCard.interval,
