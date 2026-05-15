@@ -1,4 +1,4 @@
-# MedQuest Anki Game
+# MedQuest Anki
 
 Site React/Vite para revisar flashcards do Anki com XP, níveis, streak e resposta digitada.
 

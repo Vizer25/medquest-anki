@@ -1261,7 +1261,7 @@ export default function App() {
       <main className="login-page">
         <section className="login-card">
           <div className="lock"><Lock size={34}/></div>
-          <h1>MedQuest Anki Game</h1>
+          <h1>MedQuest Anki</h1>
           <p>Entre com sua conta para sincronizar os flashcards em todos os dispositivos.</p>
           <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Email" type="email" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
@@ -1278,7 +1278,7 @@ export default function App() {
     <main className="app">
       <header className="top">
         <div>
-          <h1>MedQuest Anki Game</h1>
+          <h1>MedQuest Anki</h1>
         </div>
         <div className="profile">
           <span>{user?.email}</span>
