@@ -3,11 +3,14 @@
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:#f8fafc}
 .loading{height:100vh;display:grid;place-items:center;font-size:28px;color:#2563eb}
-.login-page{min-height:100vh;display:grid;place-items:center;padding:24px}
-.login-card{width:min(520px,100%);background:white;padding:42px;border-radius:16px;box-shadow:0 24px 70px #10182814;text-align:center;border:1px solid #e5e7eb}
-.lock{width:82px;height:82px;margin:0 auto 20px;border-radius:20px;display:grid;place-items:center;background:#eff6ff;color:#2563eb}
-.login-card h1{font-size:42px;line-height:1.15;color:#101828;margin:0 0 12px}
-.login-card p{font-size:18px;color:#667085}
+.login-page{min-height:100vh;display:grid;place-items:center;padding:20px;background:#f8fafc}
+.login-card{width:min(430px,100%);background:white;padding:30px;border-radius:14px;box-shadow:0 18px 45px #10182812;text-align:left;border:1px solid #e5e7eb}
+.lock{width:48px;height:48px;margin:0 0 18px;border-radius:12px;display:grid;place-items:center;background:#eff6ff;color:#2563eb}
+.lock svg{width:24px;height:24px}
+.login-card h1{font-size:30px;line-height:1.15;color:#101828;margin:0 0 8px}
+.login-card p{font-size:15px;line-height:1.45;color:#667085;margin:0 0 22px}
+.login-card input{font-size:15px;padding:13px 14px;border-radius:10px;margin:8px 0}
+.login-card button{padding:13px 16px;font-size:15px;border-radius:10px}
 input,textarea{width:100%;font-size:20px;border:2px solid #e5e7eb;border-radius:12px;padding:18px 20px;outline:none;margin:10px 0;background:white}
 input:focus,textarea:focus{border-color:#2563eb;box-shadow:0 0 0 4px #2563eb18}
 select{font-size:16px;border:1px solid #e5e7eb;border-radius:10px;padding:12px;background:white;color:#101828;outline:none}
