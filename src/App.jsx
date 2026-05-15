@@ -1422,7 +1422,7 @@ export default function App() {
   function deleteCardFromLibrary(cardId) {
     const card = activeCards.find(c => c.id === cardId)
     if (!card) return
-    const ok = window.confirm('Excluir este flashcard da biblioteca? Ele nao aparecera nas revisoes e nao voltara em novas importacoes do Anki.')
+    const ok = window.confirm('Excluir este flashcard da biblioteca? Ele nao aparecera nas revisoes e nao voltara em novas importacoes.')
     if (!ok) return
     setCards(prev => prev.map(c => c.id === cardId ? {
       ...c,
@@ -1543,7 +1543,7 @@ export default function App() {
     a.download = `medquest-cards-${todayKey()}.txt`
     a.click()
     URL.revokeObjectURL(url)
-    setImportLog(`${activeCards.length} cards exportados para importar no Anki.`)
+    setImportLog(`${activeCards.length} cards exportados.`)
   }
 
   function importCSV(e) {
@@ -1644,7 +1644,7 @@ export default function App() {
       <main className="login-page">
         <section className="login-card">
           <div className="lock"><Lock size={34}/></div>
-          <h1>MedQuest Anki</h1>
+          <h1>MedQuest</h1>
           <p>Entre com sua conta para sincronizar os flashcards em todos os dispositivos.</p>
           <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Email" type="email" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
@@ -1661,7 +1661,7 @@ export default function App() {
     <main className={`app ${tab === 'study' ? 'study-mode' : ''}`}>
       <header className="top">
         <div>
-          <h1>MedQuest Anki</h1>
+          <h1>MedQuest</h1>
         </div>
         <div className="profile">
           <span>{user?.email}</span>
@@ -1873,7 +1873,7 @@ export default function App() {
       {tab === 'import' && (
         <section className="card">
           <h2>Importar deck</h2>
-          <p className="hint">Use APKG para importar deck real do Anki com imagens/mídias. CSV continua disponível como alternativa.</p>
+          <p className="hint">Use APKG para importar seu deck completo com imagens/mídias. CSV continua disponível como alternativa.</p>
           <div className="actions">
             <label className={`import ${importBusy ? 'disabled' : ''}`}>
               <Upload size={18}/> {importBusy ? 'Importando...' : 'Importar .APKG'}
@@ -1883,7 +1883,7 @@ export default function App() {
               <Upload size={18}/> Importar CSV
               <input type="file" accept=".csv,.txt" onChange={importCSV} disabled={importBusy}/>
             </label>
-            <button className="secondary" onClick={exportToAnki} disabled={importBusy}><Download size={18}/> Exportar para Anki</button>
+            <button className="secondary" onClick={exportToAnki} disabled={importBusy}><Download size={18}/> Exportar deck</button>
           </div>
           {importLog && <div className="alert info">{importLog}</div>}
         </section>

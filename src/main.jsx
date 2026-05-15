@@ -18,7 +18,7 @@ class ErrorBoundary extends React.Component {
       return (
         <main className="login-page">
           <section className="login-card">
-            <h1>MedQuest Anki</h1>
+            <h1>MedQuest</h1>
             <p>O app encontrou um erro ao processar essa ação. Recarregue a página e tente novamente.</p>
             <div className="alert bad">{this.state.error.message || String(this.state.error)}</div>
             <button onClick={() => window.location.reload()}>Recarregar</button>
