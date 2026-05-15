@@ -545,6 +545,7 @@ export default function App() {
   const [senha, setSenha] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
   const [syncStatus, setSyncStatus] = useState('')
+  const [importBusy, setImportBusy] = useState(false)
   const [cards, setCards] = useState(DEFAULT_CARDS)
   const [config, setConfig] = useState(DEFAULT_CONFIG)
   const [stats, setStats] = useState(DEFAULT_STATS)
@@ -741,7 +742,12 @@ export default function App() {
   useEffect(() => {
   if (!ready || !logged || !user) return
 
-  localStorage.setItem('mq_cards', JSON.stringify(cards))
+  try {
+    localStorage.setItem('mq_cards', JSON.stringify(cards))
+  } catch (err) {
+    console.warn('Nao foi possivel salvar cards no navegador.', err)
+    setSyncStatus('Deck grande demais para salvar neste navegador. Tentando salvar na nuvem...')
+  }
 
   const saveCards = async () => {
     setSyncStatus('Salvando progresso...')
@@ -753,7 +759,7 @@ export default function App() {
         cards: cards
       })
 
-    setSyncStatus(error ? 'Erro ao salvar cards.' : 'Progresso salvo.')
+    setSyncStatus(error ? `Erro ao salvar cards: ${error.message}` : 'Progresso salvo.')
   }
 
   saveCards()
@@ -761,13 +767,22 @@ export default function App() {
 
   useEffect(() => {
     if (!ready) return
-    localStorage.setItem('mq_config', JSON.stringify(config))
+    try {
+      localStorage.setItem('mq_config', JSON.stringify(config))
+    } catch (err) {
+      console.warn('Nao foi possivel salvar configuracoes no navegador.', err)
+    }
   }, [config, ready])
 
   useEffect(() => {
   if (!ready || !logged || !user) return
 
-  localStorage.setItem('mq_stats', JSON.stringify(stats))
+  try {
+    localStorage.setItem('mq_stats', JSON.stringify(stats))
+  } catch (err) {
+    console.warn('Nao foi possivel salvar estatisticas no navegador.', err)
+    setSyncStatus('Estatisticas grandes demais para salvar neste navegador. Tentando salvar na nuvem...')
+  }
 
   const saveStats = async () => {
     setSyncStatus('Salvando progresso...')
@@ -779,7 +794,7 @@ export default function App() {
         stats: stats
       })
 
-    setSyncStatus(error ? 'Erro ao salvar estatÃ­sticas.' : 'Progresso salvo.')
+    setSyncStatus(error ? `Erro ao salvar estatisticas: ${error.message}` : 'Progresso salvo.')
   }
 
   saveStats()
@@ -1246,8 +1261,10 @@ export default function App() {
 
   async function importAPKG(e) {
     const file = e.target.files?.[0]
-    if (!file) return
+    if (!file || importBusy) return
+    setImportBusy(true)
     setImportLog('Importando APKG...')
+    await new Promise(resolve => setTimeout(resolve, 0))
     try {
       const zip = await JSZip.loadAsync(file)
       const mediaMap = await buildMediaMap(zip)
@@ -1306,6 +1323,9 @@ export default function App() {
     } catch (err) {
       console.error(err)
       setImportLog(`Erro ao importar APKG: ${err.message || String(err)}`)
+    } finally {
+      setImportBusy(false)
+      if (e.target) e.target.value = ''
     }
   }
 
@@ -1498,9 +1518,15 @@ export default function App() {
           <h2>Importar deck</h2>
           <p className="hint">Use APKG para importar deck real do Anki com imagens/mídias. CSV continua disponível como alternativa.</p>
           <div className="actions">
-            <label className="import"><Upload size={18}/> Importar .APKG<input type="file" accept=".apkg" onChange={importAPKG}/></label>
-            <label className="import dark"><Upload size={18}/> Importar CSV<input type="file" accept=".csv,.txt" onChange={importCSV}/></label>
-            <button className="secondary" onClick={exportToAnki}><Download size={18}/> Exportar para Anki</button>
+            <label className={`import ${importBusy ? 'disabled' : ''}`}>
+              <Upload size={18}/> {importBusy ? 'Importando...' : 'Importar .APKG'}
+              <input type="file" accept=".apkg" onChange={importAPKG} disabled={importBusy}/>
+            </label>
+            <label className={`import dark ${importBusy ? 'disabled' : ''}`}>
+              <Upload size={18}/> Importar CSV
+              <input type="file" accept=".csv,.txt" onChange={importCSV} disabled={importBusy}/>
+            </label>
+            <button className="secondary" onClick={exportToAnki} disabled={importBusy}><Download size={18}/> Exportar para Anki</button>
           </div>
           {importLog && <div className="alert info">{importLog}</div>}
         </section>

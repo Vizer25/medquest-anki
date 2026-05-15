@@ -48,6 +48,7 @@ textarea{min-height:160px;resize:vertical}
 .secondary{background:#f2f4f7;color:#101828}
 .import{background:#101828;position:relative;overflow:hidden}
 .import.dark{background:#475467}
+.import.disabled{opacity:.55;cursor:not-allowed;pointer-events:none}
 .import input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .hint{margin-top:22px;color:#667085;background:#f9fafb;padding:14px;border-radius:10px}
 .score-line{font-size:20px;margin-bottom:14px}
