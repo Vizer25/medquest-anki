@@ -63,9 +63,9 @@ textarea{min-height:150px;resize:vertical}
 .study-main,.answer-panel{min-width:0;background:white;border:2px solid #e5e7eb;border-radius:14px;padding:12px;min-height:255px}
 .study-main{display:flex;flex-direction:column}
 .answer-panel{position:sticky;top:12px}
-.answer-panel.result.good{background:#d1fadf;border-color:#00c853}
-.answer-panel.result.medium{background:#fff1a6;border-color:#f59e0b}
-.answer-panel.result.bad{background:#ffd7d2;border-color:#ef4444}
+.answer-panel.result.good{background:#e7f6ef;border-color:#2f9e67}
+.answer-panel.result.medium{background:#fff4cf;border-color:#d99a1b}
+.answer-panel.result.bad{background:#fde7e5;border-color:#d6453d}
 .actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:14px}
 .study-card .actions{margin-top:8px;gap:8px}
 .study-card .actions button{padding:9px 12px;font-size:14px;white-space:nowrap}
@@ -80,7 +80,7 @@ textarea{min-height:150px;resize:vertical}
 .feedback-actions button{padding:7px 10px;font-size:13px}
 .answer-box{background:white;border-radius:10px;padding:10px 12px;margin-top:8px;color:#111827;border:1px solid #e5e7eb}
 .answer-box p{margin:6px 0 0;white-space:pre-wrap}
-.answer-panel .answer-box{max-height:225px;overflow:auto}
+.answer-panel .answer-box{max-height:225px;overflow:auto;background:transparent;border:0;border-radius:0;margin:0;padding:8px 10px}
 .answer-placeholder{height:100%;min-height:230px;background:white;border-radius:10px}
 .answer-panel .feedback.good{background:#d1fadf;border-color:#00c853;color:#05603a}
 .answer-panel .feedback.medium{background:#fff1a6;border-color:#f59e0b;color:#92400e}
