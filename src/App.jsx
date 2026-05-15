@@ -392,6 +392,8 @@ function getCardView(card) {
 function RichTextEditor({ value, onChange }) {
   const editorRef = useRef(null)
   const lastHtmlRef = useRef(null)
+  const fontColors = ['#111827', '#2563eb', '#b42318', '#db2777', '#167047']
+  const highlightColors = ['#fff200', '#bfdbfe', '#fbcfe8', '#fecaca', '#93c5fd']
 
   useEffect(() => {
     if (!editorRef.current || value === lastHtmlRef.current) return
@@ -417,22 +419,25 @@ function RichTextEditor({ value, onChange }) {
     emitChange()
   }
 
+  function clearHighlight() {
+    runCommand('hiliteColor', 'transparent')
+  }
+
   return (
     <div className="rich-editor">
       <div className="rich-toolbar">
         <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); runCommand('bold') }}>B</button>
         <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('≥') }}>≥</button>
         <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('≤') }}>≤</button>
-        {['#111827', '#2563eb', '#b42318', '#167047'].map(color => (
-          <button
-            type="button"
-            aria-label={`Cor ${color}`}
-            className="color-button"
-            key={color}
-            style={{ background: color }}
-            onMouseDown={e => { e.preventDefault(); runCommand('foreColor', color) }}
-          />
+        <span className="toolbar-label">Fonte</span>
+        {fontColors.map(color => (
+          <button type="button" aria-label={`Fonte ${color}`} className="color-button" key={`font-${color}`} style={{ background: color }} onMouseDown={e => { e.preventDefault(); runCommand('foreColor', color) }} />
         ))}
+        <span className="toolbar-label">Grifo</span>
+        {highlightColors.map(color => (
+          <button type="button" aria-label={`Grifo ${color}`} className="color-button" key={`highlight-${color}`} style={{ background: color }} onMouseDown={e => { e.preventDefault(); runCommand('hiliteColor', color) }} />
+        ))}
+        <button type="button" className="tool-button clear-highlight" onMouseDown={e => { e.preventDefault(); clearHighlight() }}>×</button>
       </div>
       <div
         ref={editorRef}

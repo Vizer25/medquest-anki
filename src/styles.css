@@ -124,10 +124,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
   display:flex;
   align-items:center;
   gap:8px;
+  flex-wrap:wrap;
   padding:10px;
   border-bottom:1px solid #e5e7eb;
   background:#f9fafb;
 }
+.toolbar-label{font-size:13px;font-weight:900;color:#667085;margin-left:6px}
 .tool-button{
   width:34px;
   height:34px;
@@ -139,6 +141,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
   border:1px solid #d0d5dd;
   font-size:18px;
 }
+.clear-highlight{font-size:20px;color:#667085}
 .color-button{
   width:28px;
   height:28px;
