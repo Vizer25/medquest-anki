@@ -266,6 +266,12 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .study-mode .timer-chip{padding:5px 9px}
 .study-mode .question-html{font-size:21px;margin-bottom:10px}
 .study-mode .stats-below{margin-top:16px}
+.study-mode .stats{grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.study-mode .stats div{padding:12px;border-radius:12px;box-shadow:none;min-height:82px}
+.study-mode .stats svg{width:18px;height:18px}
+.study-mode .stats span{font-size:12px;margin:6px 0 4px}
+.study-mode .stats b{font-size:22px}
+.study-mode .bar{height:7px;margin-bottom:14px}
 .tag-cloud{
   display:flex;
   flex-wrap:wrap;

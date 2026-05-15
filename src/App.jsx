@@ -197,7 +197,7 @@ function safeStats(raw) {
 const STOP_WORDS = new Set([
   'a','ao','aos','as','com','como','da','das','de','do','dos','e','em','entre','na','nas','no','nos','o','os','ou','para','por','que','se','sem','um','uma','uns','umas',
   'qual','quais','quando','onde','paciente','conduta','tratamento','diagnostico','diagnostico','indica','indicado','indicada',
-  'iniciar','inicio','pode','podendo','caso','necessario','necessaria','realizar','fazer','usar','uso','apenas'
+  'iniciar','inicio','pode','podendo','caso','necessario','necessaria','realizar','fazer','usar','uso','apenas','importante'
 ])
 
 const MEDICAL_ALIASES = [
@@ -214,7 +214,9 @@ const MEDICAL_ALIASES = [
   ['tep', ['tromboembolismo pulmonar']],
   ['avc', ['acidente vascular cerebral']],
   ['leucocitos', ['leuco', 'leucocito', 'leucocitos']],
-  ['creatinina', ['cr']]
+  ['creatinina', ['cr']],
+  ['instrumental', ['instrumento', 'instrumentos']],
+  ['lesao visceral', ['perfuracao de outros orgaos', 'perfuracao outros orgaos', 'perfuracao de outro orgao', 'perfuracao outros orgao', 'lesao de outros orgaos', 'lesao em outros orgaos']]
 ]
 
 function canonicalizeMedicalText(text) {
