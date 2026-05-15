@@ -10,10 +10,26 @@ import {
 } from 'lucide-react'
 const supabase = createClient(
   'https://lgmfmdpzmqunouysuwjp.supabase.co',
-  'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7'
+  'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7',
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
+  }
 )
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
+
+function clearStoredAuthSession() {
+  try {
+    Object.keys(localStorage)
+      .filter(key => key.startsWith('sb-') && key.includes('auth-token'))
+      .forEach(key => localStorage.removeItem(key))
+  } catch (err) {
+    console.warn('Nao foi possivel limpar sessao salva.', err)
+  }
+}
 
 const DEFAULT_CONFIG = {
   againMinutes: 10,
@@ -611,6 +627,7 @@ export default function App() {
       let nextConfig = DEFAULT_CONFIG
       let nextStats = DEFAULT_STATS
       let nextLastAnswered = null
+      clearStoredAuthSession()
 
       try {
         const savedCards = localStorage.getItem('mq_cards')
@@ -921,6 +938,7 @@ export default function App() {
 
   async function cloudLogout() {
     await supabase.auth.signOut()
+    clearStoredAuthSession()
     setUser(null)
     setLogged(false)
     setFeedback(null)
