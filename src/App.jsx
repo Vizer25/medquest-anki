@@ -148,6 +148,56 @@ function safeStats(raw) {
   }
 }
 
+const STOP_WORDS = new Set([
+  'a','ao','aos','as','com','como','da','das','de','do','dos','e','em','entre','na','nas','no','nos','o','os','ou','para','por','que','se','sem','um','uma','uns','umas',
+  'qual','quais','quando','onde','paciente','conduta','tratamento','diagnostico','diagnostico','indica','indicado','indicada'
+])
+
+function lightStem(word) {
+  return String(word || '')
+    .replace(/(oes|aes|ais|eis|is|ns)$/g, '')
+    .replace(/(mente|idade|idades|acao|acoes|ico|ica|icos|icas|ado|ada|ados|adas)$/g, '')
+    .replace(/(s)$/g, '')
+}
+
+function answerTokens(text) {
+  return normalize(text)
+    .split(' ')
+    .map(lightStem)
+    .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+}
+
+function editDistance(a, b) {
+  if (a === b) return 0
+  if (Math.abs(a.length - b.length) > 2) return 3
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i])
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    }
+  }
+  return dp[a.length][b.length]
+}
+
+function tokenMatches(expected, userTokens) {
+  return userTokens.some(user => {
+    if (user === expected) return true
+    if (user.includes(expected) || expected.includes(user)) return Math.min(user.length, expected.length) >= 5
+    return Math.max(user.length, expected.length) >= 5 && editDistance(user, expected) <= 1
+  })
+}
+
+function semanticScore(expectedText, userText) {
+  const expectedTokens = [...new Set(answerTokens(expectedText))]
+  const userTokens = [...new Set(answerTokens(userText))]
+  if (!expectedTokens.length) return 0
+  if (normalize(userText).includes(normalize(expectedText))) return 100
+  const hits = expectedTokens.filter(token => tokenMatches(token, userTokens)).length
+  return Math.round((hits / expectedTokens.length) * 100)
+}
+
 function splitCSVLine(line) {
   const out = []
   let cur = ''
@@ -795,28 +845,18 @@ export default function App() {
     if (currentAlreadyAnswered) return
 
     const cardForAnswer = getCardView(current)
-    const userText = normalize(answer)
+    const userText = answer
     let percent = 0
 
     if (cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length) {
-      const hits = cardForAnswer.clozeAnswers.filter(item => {
-        const itemText = normalize(item)
-        if (!itemText) return false
-        const words = itemText.split(' ').filter(w => w.length > 2)
-        if (userText.includes(itemText)) return true
-        if (!words.length) return false
-        const wordHits = words.filter(w => userText.includes(w)).length
-        return wordHits / words.length > 0.5
-      }).length
-      percent = Math.round((hits / cardForAnswer.clozeAnswers.length) * 100)
+      const scores = cardForAnswer.clozeAnswers.map(item => semanticScore(item, userText))
+      percent = Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
     } else {
-      const keywords = (cardForAnswer.palavras?.length ? cardForAnswer.palavras : normalize(cardForAnswer.resposta).split(' ').filter(w => w.length > 4).slice(0, 8)).map(normalize)
-      const hits = keywords.filter(k => userText.includes(k)).length
-      percent = keywords.length ? Math.round((hits / keywords.length) * 100) : 0
+      percent = semanticScore(cardForAnswer.resposta || stripHtml(cardForAnswer.htmlBack), userText)
     }
 
-    const grade = percent <= 50 ? 'again' : percent < 70 ? 'hard' : percent < 90 ? 'good' : 'easy'
-    const isCorrect = percent > 50
+    const grade = percent < 60 ? 'again' : percent < 80 ? 'hard' : percent < 90 ? 'good' : 'easy'
+    const isCorrect = percent >= 80
     const xpDelta = isCorrect ? Math.max(5, Math.round(25 * percent / 100)) : -5
 
     setStats(prevRaw => {
@@ -1364,10 +1404,10 @@ export default function App() {
 
           <h3>Distribuição por desempenho</h3>
           <div className="grade-grid">
-            <div><b>{stats.byGrade.again}</b><span>Errei<br/>0–39%</span></div>
-            <div><b>{stats.byGrade.hard}</b><span>Difícil<br/>40–69%</span></div>
-            <div><b>{stats.byGrade.good}</b><span>Bom<br/>70–89%</span></div>
-            <div><b>{stats.byGrade.easy}</b><span>Fácil<br/>90–100%</span></div>
+            <div><b>{stats.byGrade.again}</b><span>Vermelho<br/>0-59%</span></div>
+            <div><b>{stats.byGrade.hard}</b><span>Amarelo<br/>60-79%</span></div>
+            <div><b>{stats.byGrade.good}</b><span>Verde<br/>80-89%</span></div>
+            <div><b>{stats.byGrade.easy}</b><span>Verde+<br/>90-100%</span></div>
           </div>
 
           <h3>Produtividade dos últimos 14 dias</h3>
