@@ -1707,50 +1707,61 @@ export default function App() {
                 <span className="timer-chip">Tempo: {formatTime(cardSeconds)}</span>
                 <label><input type="checkbox" checked={random} onChange={e=>setRandom(e.target.checked)}/> Aleatório</label>
               </div>
-              <div className="question-html" dangerouslySetInnerHTML={{__html: currentView.htmlFront || currentView.pergunta}} />
+              <div className="study-workspace">
+                <div className="study-main">
+                  <div className="question-html" dangerouslySetInnerHTML={{__html: currentView.htmlFront || currentView.pergunta}} />
 
-              {editing && (
-                <div className="edit-box">
-                  <h3>Editar card</h3>
-                  <label>Frente/pergunta</label>
-                  <RichTextEditor value={editFront} onChange={setEditFront} />
-                  <label>Resposta/gabarito</label>
-                  <RichTextEditor value={editBack} onChange={setEditBack} />
+                  {editing && (
+                    <div className="edit-box">
+                      <h3>Editar card</h3>
+                      <label>Frente/pergunta</label>
+                      <RichTextEditor value={editFront} onChange={setEditFront} />
+                      <label>Resposta/gabarito</label>
+                      <RichTextEditor value={editBack} onChange={setEditBack} />
+                      <div className="actions">
+                        <button onClick={saveEdit}>Salvar edição</button>
+                        <button className="secondary" onClick={()=>setEditing(false)}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!editing && (
+                    <div className="answer-entry">
+                      <div className="answer-tools">
+                        <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Alt + .">≥</button>
+                        <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Alt + ,">≤</button>
+                      </div>
+                      <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={handleAnswerKeyDown} placeholder="Digite sua resposta aqui..." />
+                    </div>
+                  )}
                   <div className="actions">
-                    <button onClick={saveEdit}>Salvar edição</button>
-                    <button className="secondary" onClick={()=>setEditing(false)}>Cancelar</button>
+                    <button onClick={evaluate} disabled={currentAlreadyAnswered || editing}><CheckCircle2 size={18}/> Responder</button>
+                    <button className="secondary" onClick={nextCard}>Próximo</button>
+                    <button className="secondary" onClick={goToLastAnswered} disabled={!lastAnsweredId}>Voltar último</button>
+                    <button className="secondary" onClick={startEdit}>Editar card</button>
                   </div>
                 </div>
-              )}
-
-              {!editing && (
-                <div className="answer-entry">
-                  <div className="answer-tools">
-                    <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Alt + .">≥</button>
-                    <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Alt + ,">≤</button>
-                  </div>
-                  <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={handleAnswerKeyDown} placeholder="Digite sua resposta aqui..." />
-                </div>
-              )}
-              <div className="actions">
-                <button onClick={evaluate} disabled={currentAlreadyAnswered || editing}><CheckCircle2 size={18}/> Responder</button>
-                <button className="secondary" onClick={nextCard}>Próximo</button>
-                <button className="secondary" onClick={goToLastAnswered} disabled={!lastAnsweredId}>Voltar último</button>
-                <button className="secondary" onClick={startEdit}>Editar card</button>
+                <aside className="answer-panel">
+                  {feedback && feedback.cardId === current.id ? (
+                    <div className={`feedback ${feedback.type}`}>
+                      <div className="score-line">{feedback.text}</div>
+                      <div className="feedback-actions">
+                        <div className="pill">Agendamento: {feedback.scheduleLabel}</div>
+                        {feedback.percent < 80 && <button className="secondary" onClick={markCurrentAsCorrect} title="Ctrl + Shift + A"><CheckCircle2 size={18}/> Marcar como acerto</button>}
+                      </div>
+                      <div className="answer-box">
+                        <b>Resposta esperada:</b>
+                        <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="answer-placeholder">
+                      <b>Gabarito</b>
+                      <span>Responda com Ctrl + Enter para mostrar a correção aqui.</span>
+                    </div>
+                  )}
+                </aside>
               </div>
-              {feedback && feedback.cardId === current.id && (
-                <div className={`feedback ${feedback.type}`}>
-                  <div className="score-line">{feedback.text}</div>
-                  <div className="feedback-actions">
-                    <div className="pill">Agendamento: {feedback.scheduleLabel}</div>
-                    {feedback.percent < 80 && <button className="secondary" onClick={markCurrentAsCorrect} title="Ctrl + Shift + A"><CheckCircle2 size={18}/> Marcar como acerto</button>}
-                  </div>
-                  <div className="answer-box">
-                    <b>Resposta esperada:</b>
-                    <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
-                  </div>
-                </div>
-              )}
             </>
           )}
         </section>
