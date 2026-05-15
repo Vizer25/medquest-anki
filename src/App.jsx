@@ -1212,6 +1212,78 @@ export default function App() {
     }, 0)
   }
 
+  function handleAnswerKeyDown(event) {
+    if (!event.altKey) return
+    if (event.key === '.' || event.key === '>') {
+      event.preventDefault()
+      insertAnswerSymbol('≥')
+    }
+    if (event.key === ',' || event.key === '<') {
+      event.preventDefault()
+      insertAnswerSymbol('≤')
+    }
+  }
+
+  function markCurrentAsCorrect() {
+    if (!current || !feedback || feedback.cardId !== current.id) return
+    const previousGrade = feedback.grade || pendingGrade?.grade || 'again'
+    const wasCorrect = feedback.percent >= 80
+    const correctedGrade = 'good'
+
+    setPendingGrade({ cardId: current.id, grade: correctedGrade })
+    setCards(prev => prev.map(card => card.id === current.id ? {
+      ...card,
+      correctCount: Math.max(Number(card.correctCount || 0), 1)
+    } : card))
+    const nextCorrectCount = Math.max(Number(current.correctCount || 0), 1) + 1
+    setFeedback(prev => prev ? {
+      ...prev,
+      type: 'good',
+      grade: correctedGrade,
+      percent: Math.max(Number(prev.percent || 0), 80),
+      text: `Marcado manualmente como acerto. Resultado anterior: ${prev.percent}%.`,
+      scheduleLabel: nextCorrectCount === 2 ? '1 dia' : nextCorrectCount === 3 ? '1 semana' : nextCorrectCount === 4 ? '15 dias' : '1 mês'
+    } : prev)
+
+    setStats(prevRaw => {
+      const prev = safeStats(prevRaw)
+      const history = [...(prev.history || [])]
+      const lastIndex = history.map(item => item.id).lastIndexOf(current.id)
+      if (lastIndex >= 0) {
+        history[lastIndex] = {
+          ...history[lastIndex],
+          percent: Math.max(Number(history[lastIndex].percent || 0), 80),
+          grade: correctedGrade,
+          correct: true,
+          manuallyCorrected: true
+        }
+      }
+      const byGrade = { ...prev.byGrade }
+      if (byGrade[previousGrade] > 0) byGrade[previousGrade] -= 1
+      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + (wasCorrect ? 0 : 1)
+
+      return {
+        ...prev,
+        correct: (prev.correct || 0) + (wasCorrect ? 0 : 1),
+        wrong: Math.max(0, (prev.wrong || 0) - (wasCorrect ? 0 : 1)),
+        streak: wasCorrect ? prev.streak : Math.max(1, prev.streak || 0),
+        record: Math.max(prev.record || 0, wasCorrect ? prev.streak || 0 : Math.max(1, prev.streak || 0)),
+        history,
+        masteryByCard: {
+          ...(prev.masteryByCard || {}),
+          [current.id]: {
+            bestPercent: Math.max(Number(prev.masteryByCard?.[current.id]?.bestPercent || 0), 80),
+            lastPercent: 80,
+            lastGrade: correctedGrade,
+            manuallyCorrected: true,
+            updatedAt: new Date().toISOString()
+          }
+        },
+        byGrade
+      }
+    })
+  }
+
   function goToLastAnswered() {
     if (!lastAnsweredId) return
     const updated = cards.map(c => c.id === lastAnsweredId ? { ...c, dueAt: Date.now() } : c)
@@ -1642,10 +1714,10 @@ export default function App() {
               {!editing && (
                 <div className="answer-entry">
                   <div className="answer-tools">
-                    <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button">≥</button>
-                    <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button">≤</button>
+                    <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Alt + .">≥</button>
+                    <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Alt + ,">≤</button>
                   </div>
-                  <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Digite sua resposta aqui..." />
+                  <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={handleAnswerKeyDown} placeholder="Digite sua resposta aqui..." />
                 </div>
               )}
               <div className="actions">
@@ -1657,7 +1729,10 @@ export default function App() {
               {feedback && feedback.cardId === current.id && (
                 <div className={`feedback ${feedback.type}`}>
                   <div className="score-line">{feedback.text}</div>
-                  <div className="pill">Agendamento: {feedback.scheduleLabel}</div>
+                  <div className="feedback-actions">
+                    <div className="pill">Agendamento: {feedback.scheduleLabel}</div>
+                    {feedback.percent < 80 && <button className="secondary" onClick={markCurrentAsCorrect}><CheckCircle2 size={18}/> Marcar como acerto</button>}
+                  </div>
                   <div className="answer-box">
                     <b>Resposta esperada:</b>
                     <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />

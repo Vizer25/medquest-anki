@@ -58,6 +58,8 @@ textarea{min-height:150px;resize:vertical}
 .import input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .hint{margin-top:22px;color:#667085;background:#f9fafb;padding:14px;border-radius:10px}
 .score-line{font-size:20px;margin-bottom:14px}
+.feedback-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
+.feedback-actions button{padding:8px 12px;font-size:14px}
 .answer-box{background:white;border-radius:10px;padding:14px;margin-top:10px;color:#111827;border:1px solid #e5e7eb}
 .answer-entry{display:grid;gap:6px}
 .answer-entry textarea{min-height:118px;font-size:17px;line-height:1.45;padding:14px 16px;margin:4px 0 8px}
