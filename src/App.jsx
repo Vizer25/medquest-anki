@@ -1513,9 +1513,9 @@ export default function App() {
             </p>
             <p className="hint">O streak só conta nos dias com pelo menos {STREAK_MIN_CARDS} cards respondidos.</p>
             <div className="mastery-breakdown">
-              <div><b>{masteredCount}</b><span>Cards dominados<br/>80-100%</span></div>
-              <div><b>{partialCount}</b><span>Em progresso<br/>60-79%</span></div>
-              <div><b>{weakCount}</b><span>Prioridade<br/>0-59%</span></div>
+              <div className="mastery-ok"><b>{masteredCount}</b><span>Cards dominados<br/>80-100%</span></div>
+              <div className="mastery-mid"><b>{partialCount}</b><span>Em progresso<br/>60-79%</span></div>
+              <div className="mastery-bad"><b>{weakCount}</b><span>Prioridade<br/>0-59%</span></div>
             </div>
           </div>
           <h3>Gráficos de estudo</h3>
@@ -1554,10 +1554,10 @@ export default function App() {
 
           <h3>Distribuição por desempenho</h3>
           <div className="grade-grid">
-            <div><b>{stats.byGrade.again}</b><span>Vermelho<br/>0-59%</span></div>
-            <div><b>{stats.byGrade.hard}</b><span>Amarelo<br/>60-79%</span></div>
-            <div><b>{stats.byGrade.good}</b><span>Verde<br/>80-89%</span></div>
-            <div><b>{stats.byGrade.easy}</b><span>Verde+<br/>90-100%</span></div>
+            <div className="grade-bad"><b>{stats.byGrade.again}</b><span>Vermelho<br/>0-59%</span><i style={{width: `${Math.min(100, ((stats.byGrade.again || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+            <div className="grade-mid"><b>{stats.byGrade.hard}</b><span>Amarelo<br/>60-79%</span><i style={{width: `${Math.min(100, ((stats.byGrade.hard || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+            <div className="grade-ok"><b>{stats.byGrade.good}</b><span>Verde<br/>80-89%</span><i style={{width: `${Math.min(100, ((stats.byGrade.good || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+            <div className="grade-ok"><b>{stats.byGrade.easy}</b><span>Verde+<br/>90-100%</span><i style={{width: `${Math.min(100, ((stats.byGrade.easy || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
           </div>
 
           <h3>Produtividade dos últimos 14 dias</h3>
