@@ -616,6 +616,7 @@ export default function App() {
   const [splitCardId, setSplitCardId] = useState(null)
   const [splitParts, setSplitParts] = useState([])
   const [splitSuspendOriginal, setSplitSuspendOriginal] = useState(true)
+  const answerRef = useRef(null)
 
   async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats) {
     if (!authedUser) return
@@ -1193,6 +1194,22 @@ export default function App() {
     setIndex(0)
   }
 
+  function insertAnswerSymbol(symbol) {
+    const input = answerRef.current
+    if (!input) {
+      setAnswer(prev => `${prev}${symbol}`)
+      return
+    }
+    const start = input.selectionStart ?? answer.length
+    const end = input.selectionEnd ?? answer.length
+    const next = `${answer.slice(0, start)}${symbol}${answer.slice(end)}`
+    setAnswer(next)
+    window.setTimeout(() => {
+      input.focus()
+      input.setSelectionRange(start + symbol.length, start + symbol.length)
+    }, 0)
+  }
+
   function goToLastAnswered() {
     if (!lastAnsweredId) return
     const updated = cards.map(c => c.id === lastAnsweredId ? { ...c, dueAt: Date.now() } : c)
@@ -1620,7 +1637,15 @@ export default function App() {
                 </div>
               )}
 
-              {!editing && <textarea value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Digite sua resposta aqui..." />}
+              {!editing && (
+                <div className="answer-entry">
+                  <div className="answer-tools">
+                    <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button">≥</button>
+                    <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button">≤</button>
+                  </div>
+                  <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Digite sua resposta aqui..." />
+                </div>
+              )}
               <div className="actions">
                 <button onClick={evaluate} disabled={currentAlreadyAnswered || editing}><CheckCircle2 size={18}/> Responder</button>
                 <button className="secondary" onClick={nextCard}>Próximo</button>
