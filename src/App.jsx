@@ -613,7 +613,6 @@ export default function App() {
   const [editing, setEditing] = useState(false)
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
-  const [random, setRandom] = useState(false)
   const [tab, setTab] = useState('study')
   const [siteSeconds, setSiteSeconds] = useState(0)
   const [cardSeconds, setCardSeconds] = useState(0)
@@ -1158,7 +1157,13 @@ export default function App() {
       ? cards.map(c => c.id === pendingGrade.cardId ? scheduleCard(c, pendingGrade.grade) : c)
       : cards
 
-    const freshDue = updatedCards.filter(c => !c.dueAt || c.dueAt <= Date.now())
+    const focusedIds = new Set(focusedCardIds)
+    const freshDue = updatedCards.filter(c => {
+      if (c.deleted || c.suspended) return false
+      if (focusedIds.size && !focusedIds.has(c.id)) return false
+      if (!focusedIds.size && studyTag && !String(c.tags || '').split(/\s+/).includes(studyTag)) return false
+      return !c.dueAt || c.dueAt <= Date.now()
+    })
 
     setCards(updatedCards)
     setAnswer('')
@@ -1170,14 +1175,7 @@ export default function App() {
       return
     }
 
-    if (random) {
-      setIndex(Math.floor(Math.random() * freshDue.length))
-    } else {
-      setIndex(prev => {
-        const next = prev + 1
-        return next >= freshDue.length ? 0 : next
-      })
-    }
+    setIndex(Math.floor(Math.random() * freshDue.length))
   }
 
   function resetAll() {
@@ -1739,11 +1737,18 @@ export default function App() {
           ) : (
             <>
               <div className="card-top">
-                <span>Card vencido {Math.min(index + 1, dueCards.length)} de {dueCards.length}</span>
-                <span className="timer-chip">Tempo: {formatTime(cardSeconds)}</span>
-                {timeChallenge && !currentAlreadyAnswered && <span className={`challenge-timer ${challengeLeft <= 10 ? 'urgent' : ''}`}>{challengeLeft}s</span>}
-                <label><input type="checkbox" checked={timeChallenge} onChange={e=>setTimeChallenge(e.target.checked)}/> Desafio 30s</label>
-                <label><input type="checkbox" checked={random} onChange={e=>setRandom(e.target.checked)}/> Aleatório</label>
+                <span className="card-count">Card vencido {Math.min(index + 1, dueCards.length)} de {dueCards.length}</span>
+                <span className={timeChallenge && !currentAlreadyAnswered ? `challenge-timer ${challengeLeft <= 10 ? 'urgent' : ''}` : 'timer-chip'}>
+                  {timeChallenge && !currentAlreadyAnswered ? `${challengeLeft}s` : formatTime(cardSeconds)}
+                </span>
+                <button
+                  className={`quick-toggle ${timeChallenge ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => setTimeChallenge(value => !value)}
+                  title={timeChallenge ? 'Desligar desafio de 30 segundos' : 'Ligar desafio de 30 segundos'}
+                >
+                  30s
+                </button>
               </div>
               <div className="question-html" dangerouslySetInnerHTML={{__html: currentView.htmlFront || currentView.pergunta}} />
               <div className="study-workspace">

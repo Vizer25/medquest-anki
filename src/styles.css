@@ -25,7 +25,7 @@ button,.import{border:0;background:#2563eb;color:white;padding:15px 22px;border-
 .app{max-width:1320px;margin:0 auto;padding:52px 26px}
 .top{display:flex;justify-content:space-between;gap:24px;align-items:center;margin-bottom:24px}
 h1{font-size:48px;color:#101828;margin:0}
-.profile{background:white;border-radius:14px;padding:18px 24px;display:flex;align-items:center;gap:14px;box-shadow:0 18px 55px #1018280e;border:1px solid #e5e7eb}
+.profile{background:white;border-radius:14px;padding:12px 16px;display:flex;align-items:center;gap:10px;box-shadow:0 12px 38px #1018280b;border:1px solid #e5e7eb}
 .profile svg{color:#2563eb}
 .profile span{color:#667085}
 .profile button{background:#f2f4f7;color:#101828}
@@ -47,7 +47,10 @@ h1{font-size:48px;color:#101828;margin:0}
 .study-card{margin-bottom:28px}
 .study-card.card{padding:26px 34px}
 .stats-below{margin-top:28px}
-.card-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#667085;font-size:16px;margin-bottom:16px}
+.card-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;color:#667085;font-size:16px;margin-bottom:16px}
+.card-count{justify-self:start}
+.quick-toggle{justify-self:end;width:42px;height:32px;padding:0;border-radius:999px;justify-content:center;background:#f2f4f7;color:#344054;border:1px solid #e5e7eb;font-size:13px;font-weight:900}
+.quick-toggle.active{background:#dc2626;color:white;border-color:#dc2626;box-shadow:0 0 0 4px #dc26261a}
 .question-html{font-size:25px;font-weight:850;line-height:1.25;margin-bottom:12px}
 .question-html img,.answer-box img,.mini img{max-width:100%;max-height:320px;border-radius:10px;margin:12px 0;border:1px solid #e5e7eb}
 textarea{min-height:150px;resize:vertical}
@@ -81,10 +84,14 @@ textarea{min-height:150px;resize:vertical}
 .answer-entry textarea:focus{box-shadow:none;border-color:#e5e7eb}
 .answer-tools{display:flex;gap:6px;justify-content:flex-end}
 .answer-tools button{width:30px;height:28px;padding:0;justify-content:center;font-size:17px;border-radius:7px;background:#f2f4f7;color:#101828;border:1px solid #e5e7eb}
-.pill,.timer-chip{display:inline-block;background:white;border:1px solid #e5e7eb;padding:7px 11px;border-radius:999px;color:#101828;font-weight:900}
-.timer-chip{background:#eff6ff;color:#2563eb}
-.challenge-timer{display:inline-block;background:#ecfdf3;color:#027a48;border:1px solid #12b76a;padding:7px 11px;border-radius:999px;font-weight:900}
-.challenge-timer.urgent{background:#fef3f2;color:#b42318;border-color:#f04438;box-shadow:0 0 0 4px #f0443814}
+.pill,.timer-chip{display:inline-flex;align-items:center;justify-content:center;min-width:72px;background:white;border:1px solid #e5e7eb;padding:7px 12px;border-radius:999px;color:#101828;font-weight:900}
+.timer-chip{justify-self:center;background:#f8fafc;color:#2563eb;border-color:#dbe4f0}
+.challenge-timer{justify-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:72px;background:#fee2e2;color:#991b1b;border:1px solid #ef4444;padding:8px 14px;border-radius:999px;font-weight:950;box-shadow:0 0 0 4px #ef44441a}
+.challenge-timer.urgent{background:#dc2626;color:white;border-color:#b91c1c;animation:countdownPulse .85s infinite}
+@keyframes countdownPulse{
+  0%,100%{transform:scale(1);box-shadow:0 0 0 3px #dc262633}
+  50%{transform:scale(1.08);box-shadow:0 0 0 8px #dc26261f}
+}
 .grid-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:18px}
 .mini{background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px}
 .mini.suspended{background:#fff8e6;border-color:#fedf89}
@@ -268,24 +275,24 @@ button:disabled{opacity:.55;cursor:not-allowed}
   font-weight:800;
 }
 
-.study-mode.app{padding-top:14px}
-.study-mode .top{margin-bottom:8px}
+.study-mode.app{padding-top:10px}
+.study-mode .top{margin-bottom:6px;align-items:flex-start}
 .study-mode h1{font-size:24px}
-.study-mode .profile{padding:8px 10px;border-radius:10px;box-shadow:none}
-.study-mode .profile span{font-size:14px}
-.study-mode .profile button{padding:8px 10px;font-size:14px}
+.study-mode .profile{padding:6px 8px;border-radius:10px;box-shadow:none;margin-top:4px}
+.study-mode .profile span{font-size:13px;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.study-mode .profile button{padding:7px 9px;font-size:13px}
 .study-mode .sync-status{margin:0 0 8px;font-size:13px}
 .study-mode .import-status{margin:0 0 8px;padding:10px 12px;font-size:13px}
-.study-mode .tabs{gap:8px;margin-bottom:10px}
+.study-mode .tabs{gap:8px;margin-bottom:8px}
 .study-mode .tabs button{padding:9px 11px;font-size:14px;border-radius:8px}
 .study-mode .tabs svg{width:15px;height:15px}
-.study-mode .study-card.card{padding:16px 22px}
+.study-mode .study-card.card{padding:14px 22px}
 .study-mode .study-filters{margin-bottom:8px;gap:8px;align-items:center}
 .study-mode .study-filters label{display:flex;align-items:center;gap:8px;font-size:13px}
 .study-mode .study-filters select{padding:8px 10px;font-size:14px;min-width:220px}
 .study-mode .hint{margin-top:8px;padding:8px 10px;font-size:13px}
-.study-mode .card-top{margin-bottom:10px;font-size:14px}
-.study-mode .timer-chip{padding:5px 9px}
+.study-mode .card-top{margin-bottom:8px;font-size:14px}
+.study-mode .timer-chip{padding:5px 10px}
 .study-mode .question-html{font-size:24px;margin-bottom:10px}
 .study-mode .stats-below{display:none}
 .study-mode .feedback{padding:12px}
