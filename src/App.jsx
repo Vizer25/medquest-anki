@@ -961,46 +961,6 @@ export default function App() {
     }
   }
 
-  async function createAccount() {
-    const email = login.trim()
-    if (!email || senha.length < 6) {
-      setFeedback({ type: 'bad', text: 'Use um email e uma senha com pelo menos 6 caracteres.' })
-      return
-    }
-
-    setAuthLoading(true)
-    setFeedback(null)
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password: senha
-    })
-
-    if (error) {
-      setAuthLoading(false)
-      setFeedback({ type: 'bad', text: error.message || 'Nao consegui criar a conta.' })
-      return
-    }
-
-    if (!data.session || !data.user) {
-      setAuthLoading(false)
-      setFeedback({ type: 'good', text: 'Conta criada. Confirme seu email e depois entre novamente.' })
-      return
-    }
-
-    try {
-      await loadCloudProgress(data.user)
-      setUser(data.user)
-      setLogged(true)
-      setSenha('')
-    } catch (err) {
-      console.error(err)
-      setFeedback({ type: 'bad', text: 'Conta criada, mas nao consegui salvar o progresso inicial.' })
-    } finally {
-      setAuthLoading(false)
-    }
-  }
-
   async function cloudLogout() {
     await supabase.auth.signOut()
     clearStoredAuthSession()
@@ -1702,7 +1662,6 @@ export default function App() {
           <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Email" type="email" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <button onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
-          <button className="secondary" onClick={createAccount} disabled={authLoading}>Criar conta</button>
           {feedback?.type === 'bad' && <div className="alert bad">{feedback.text}</div>}
           {feedback?.type === 'good' && <div className="alert good">{feedback.text}</div>}
         </section>
