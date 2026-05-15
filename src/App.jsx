@@ -1536,7 +1536,7 @@ export default function App() {
   }
 
   return (
-    <main className="app">
+    <main className={`app ${tab === 'study' ? 'study-mode' : ''}`}>
       <header className="top">
         <div>
           <h1>MedQuest Anki</h1>

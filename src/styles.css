@@ -150,6 +150,11 @@ textarea{min-height:150px;resize:vertical}
   h1{font-size:36px}
   .question-html{font-size:24px}
   .study-card.card{padding:22px}
+  .study-mode .top{gap:8px}
+  .study-mode .profile{flex-direction:row;align-items:center}
+  .study-mode .tabs button{font-size:13px;padding:8px 9px}
+  .study-mode .study-filters label{align-items:flex-start;flex-direction:column}
+  .study-mode .study-filters select{min-width:0;width:100%}
   .history-item{grid-template-columns:1fr}
   .history-item small{grid-column:1}
   .split-part{grid-template-columns:1fr}
@@ -240,6 +245,27 @@ button:disabled{opacity:.55;cursor:not-allowed}
   color:#667085;
   font-weight:800;
 }
+
+.study-mode.app{padding-top:14px}
+.study-mode .top{margin-bottom:8px}
+.study-mode h1{font-size:24px}
+.study-mode .profile{padding:8px 10px;border-radius:10px;box-shadow:none}
+.study-mode .profile span{font-size:14px}
+.study-mode .profile button{padding:8px 10px;font-size:14px}
+.study-mode .sync-status{margin:0 0 8px;font-size:13px}
+.study-mode .import-status{margin:0 0 8px;padding:10px 12px;font-size:13px}
+.study-mode .tabs{gap:8px;margin-bottom:10px}
+.study-mode .tabs button{padding:9px 11px;font-size:14px;border-radius:8px}
+.study-mode .tabs svg{width:15px;height:15px}
+.study-mode .study-card.card{padding:16px 22px}
+.study-mode .study-filters{margin-bottom:8px;gap:8px;align-items:center}
+.study-mode .study-filters label{display:flex;align-items:center;gap:8px;font-size:13px}
+.study-mode .study-filters select{padding:8px 10px;font-size:14px;min-width:220px}
+.study-mode .hint{margin-top:8px;padding:8px 10px;font-size:13px}
+.study-mode .card-top{margin-bottom:10px;font-size:14px}
+.study-mode .timer-chip{padding:5px 9px}
+.study-mode .question-html{font-size:21px;margin-bottom:10px}
+.study-mode .stats-below{margin-top:16px}
 .tag-cloud{
   display:flex;
   flex-wrap:wrap;
