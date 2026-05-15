@@ -36,7 +36,9 @@ h1{font-size:48px;color:#101828;margin:0}
 .profile button{background:#f2f4f7;color:#101828}
 .profile button{padding:7px 9px;font-size:13px}
 .sync-status{margin:-10px 0 24px;color:#667085;font-weight:800}
-.import-status{margin:-6px 0 20px;padding:16px 18px;border-radius:12px;font-weight:900}
+.import-status{margin:-6px 0 12px;padding:10px 12px;border-radius:10px;font-weight:900;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px}
+.import-status button{width:24px;height:24px;padding:0;border-radius:999px;background:transparent;color:inherit;justify-content:center;font-size:18px;line-height:1;opacity:.65}
+.import-status button:hover{opacity:1;background:#ffffff80}
 .import-status.good{background:#ecfdf3;color:#027a48;border:1px solid #12b76a}
 .import-status.bad{background:#fef3f2;color:#b42318;border:1px solid #f04438}
 .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}

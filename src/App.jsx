@@ -720,6 +720,12 @@ export default function App() {
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    if (!importLog) return
+    const timeout = window.setTimeout(() => setImportLog(''), 9000)
+    return () => window.clearTimeout(timeout)
+  }, [importLog])
+
   const activeCards = useMemo(() => cards.filter(card => !card.deleted), [cards])
   const suspendedCount = activeCards.filter(card => card.suspended).length
   const deletedCount = cards.filter(card => card.deleted).length
@@ -1685,7 +1691,8 @@ export default function App() {
       </header>
       {importLog && (
         <div className={`import-status ${importLog.startsWith('Erro') || importLog.startsWith('Nao') ? 'bad' : 'good'}`}>
-          {importLog}
+          <span>{importLog}</span>
+          <button type="button" onClick={() => setImportLog('')} aria-label="Fechar aviso">×</button>
         </div>
       )}
 
@@ -1898,7 +1905,6 @@ export default function App() {
             </label>
             <button className="secondary" onClick={exportToAnki} disabled={importBusy}><Download size={18}/> Exportar deck</button>
           </div>
-          {importLog && <div className="alert info">{importLog}</div>}
         </section>
       )}
 
@@ -1917,7 +1923,6 @@ export default function App() {
               <button className="secondary" onClick={()=>{setNewFront(''); setNewBack('')}}>Limpar</button>
             </div>
           </div>
-          {importLog && <div className="alert info">{importLog}</div>}
         </section>
       )}
 
