@@ -76,6 +76,23 @@ textarea{min-height:160px;resize:vertical}
 .mastery-breakdown div{background:white;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
 .mastery-breakdown b{display:block;font-size:30px;color:#2563eb}
 .mastery-breakdown span{color:#667085;font-weight:800}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0 26px}
+.chart-box{background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:18px}
+.chart-box h4{margin:0 0 14px;color:#101828}
+.bar-chart{height:190px;display:grid;grid-template-columns:repeat(30,1fr);gap:5px;align-items:end}
+.chart-day{height:100%;display:flex;flex-direction:column;justify-content:end;gap:6px;align-items:center}
+.chart-day span{width:100%;min-height:3px;background:#d0d5dd;border-radius:6px 6px 0 0}
+.chart-day span.met{background:#2563eb}
+.chart-day small{font-size:10px;color:#667085;writing-mode:vertical-rl;transform:rotate(180deg)}
+.chart-note{color:#667085;font-size:14px;margin:12px 0 0}
+.accuracy-chart{display:grid;gap:8px;max-height:230px;overflow:auto;padding-right:6px}
+.accuracy-row{display:grid;grid-template-columns:52px 1fr 48px;gap:10px;align-items:center}
+.accuracy-row span,.accuracy-row b{font-size:13px;color:#667085}
+.accuracy-row div{height:12px;background:white;border:1px solid #e5e7eb;border-radius:999px;overflow:hidden}
+.accuracy-row i{display:block;height:100%;border-radius:999px}
+.good-line{background:#12b76a}
+.mid-line{background:#fdb022}
+.bad-line{background:#f04438}
 .daily-chart,.history-list{display:grid;gap:10px;margin:14px 0 26px}
 .day-row{display:grid;grid-template-columns:60px 1fr 45px;align-items:center;gap:12px}
 .day-bar{height:18px;background:#f2f4f7;border-radius:999px;overflow:hidden}
@@ -89,6 +106,7 @@ textarea{min-height:160px;resize:vertical}
 @media(max-width:900px){
   .top,.profile{flex-direction:column;align-items:flex-start}
   .stats,.grid-cards,.settings-grid,.advanced-grid,.grade-grid{grid-template-columns:1fr}
+  .chart-grid,.mastery-breakdown{grid-template-columns:1fr}
   h1{font-size:36px}
   .question-html{font-size:24px}
   .history-item{grid-template-columns:1fr}

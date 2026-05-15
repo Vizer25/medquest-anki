@@ -13,6 +13,7 @@ const supabase = createClient(
   'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7'
 )
 const DAY = 24 * 60 * 60 * 1000
+const STREAK_MIN_CARDS = 10
 
 const DEFAULT_CONFIG = {
   againMinutes: 10,
@@ -659,6 +660,21 @@ export default function App() {
   const recentAverage = recentHistory.length ? Math.round(recentHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / recentHistory.length) : 0
   const previousAverage = previousHistory.length ? Math.round(previousHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / previousHistory.length) : null
   const recentTrend = previousAverage == null ? null : recentAverage - previousAverage
+  const performanceDays = Array.from({ length: 30 }, (_, index) => {
+    const date = new Date(Date.now() - (29 - index) * DAY)
+    const key = date.toISOString().slice(0, 10)
+    const dayHistory = (stats.history || []).filter(item => String(item.date || '').slice(0, 10) === key)
+    const avgPercent = dayHistory.length
+      ? Math.round(dayHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / dayHistory.length)
+      : 0
+    return {
+      key,
+      label: key.slice(5).replace('-', '/'),
+      count: Number(stats.daily?.[key] || 0),
+      avgPercent
+    }
+  })
+  const maxPerformanceCount = Math.max(1, ...performanceDays.map(day => day.count))
   const currentAlreadyAnswered = !!current && (
     pendingGrade?.cardId === current.id ||
     feedback?.cardId === current.id
@@ -868,10 +884,14 @@ export default function App() {
     const yesterday = new Date(Date.now() - DAY).toISOString().slice(0, 10)
     const daily = { ...(oldStats.daily || {}), [t]: (oldStats.daily?.[t] || 0) + 1 }
     let studyStreak = oldStats.studyStreak || 0
-    if (oldStats.lastStudyDate !== t) {
+    let lastStudyDate = oldStats.lastStudyDate || ''
+
+    if (daily[t] >= STREAK_MIN_CARDS && lastStudyDate !== t) {
       studyStreak = oldStats.lastStudyDate === yesterday ? studyStreak + 1 : 1
+      lastStudyDate = t
     }
-    return { daily, studyStreak, lastStudyDate: t }
+
+    return { daily, studyStreak, lastStudyDate }
   }
 
   function scheduleCard(card, grade) {
@@ -1491,10 +1511,38 @@ export default function App() {
                 : `Faltam ${masteryGap} pontos percentuais para atingir 80% de domínio geral.`}
               {recentTrend != null && ` Nas últimas 50 respostas, sua média ficou em ${recentAverage}% (${recentTrend >= 0 ? '+' : ''}${recentTrend} pontos vs. as 50 anteriores).`}
             </p>
+            <p className="hint">O streak só conta nos dias com pelo menos {STREAK_MIN_CARDS} cards respondidos.</p>
             <div className="mastery-breakdown">
               <div><b>{masteredCount}</b><span>Cards dominados<br/>80-100%</span></div>
               <div><b>{partialCount}</b><span>Em progresso<br/>60-79%</span></div>
               <div><b>{weakCount}</b><span>Prioridade<br/>0-59%</span></div>
+            </div>
+          </div>
+          <h3>Gráficos de estudo</h3>
+          <div className="chart-grid">
+            <div className="chart-box">
+              <h4>Cards por dia</h4>
+              <div className="bar-chart">
+                {performanceDays.map(day => (
+                  <div className="chart-day" key={day.key}>
+                    <span style={{height: `${Math.max(3, (day.count / maxPerformanceCount) * 100)}%`}} className={day.count >= STREAK_MIN_CARDS ? 'met' : ''} title={`${day.label}: ${day.count} cards`} />
+                    <small>{day.label}</small>
+                  </div>
+                ))}
+              </div>
+              <p className="chart-note">Linha mental: 10 cards/dia para manter streak.</p>
+            </div>
+            <div className="chart-box">
+              <h4>Acurácia diária</h4>
+              <div className="accuracy-chart">
+                {performanceDays.map(day => (
+                  <div className="accuracy-row" key={day.key}>
+                    <span>{day.label}</span>
+                    <div><i style={{width: `${day.avgPercent}%`}} className={day.avgPercent >= 80 ? 'good-line' : day.avgPercent >= 60 ? 'mid-line' : 'bad-line'} /></div>
+                    <b>{day.avgPercent || '--'}{day.avgPercent ? '%' : ''}</b>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
           <div className="advanced-grid">
