@@ -369,9 +369,26 @@ export default function App() {
   })
 
   useEffect(() => {
-    if (!ready) return
-    localStorage.setItem('mq_cards', JSON.stringify(cards))
-  }, [cards, ready])
+  if (!ready || !logged) return
+
+  localStorage.setItem('mq_cards', JSON.stringify(cards))
+
+  const saveCards = async () => {
+    const { data: userData } = await supabase.auth.getUser()
+    const user = userData?.user
+    if (!user) return
+
+    await supabase
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        email: user.email,
+        cards: cards
+      })
+  }
+
+  saveCards()
+}, [cards, ready, logged])
 
   useEffect(() => {
     if (!ready) return
@@ -379,9 +396,26 @@ export default function App() {
   }, [config, ready])
 
   useEffect(() => {
-    if (!ready) return
-    localStorage.setItem('mq_stats', JSON.stringify(stats))
-  }, [stats, ready])
+  if (!ready || !logged) return
+
+  localStorage.setItem('mq_stats', JSON.stringify(stats))
+
+  const saveStats = async () => {
+    const { data: userData } = await supabase.auth.getUser()
+    const user = userData?.user
+    if (!user) return
+
+    await supabase
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        email: user.email,
+        stats: stats
+      })
+  }
+
+  saveStats()
+}, [stats, ready, logged])
 
   useEffect(() => {
     if (!ready || !logged) return
