@@ -312,8 +312,11 @@ function getCardView(card) {
 export default function App() {
   const [ready, setReady] = useState(false)
   const [logged, setLogged] = useState(false)
+  const [user, setUser] = useState(null)
   const [login, setLogin] = useState('')
   const [senha, setSenha] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [syncStatus, setSyncStatus] = useState('')
   const [cards, setCards] = useState(DEFAULT_CARDS)
   const [config, setConfig] = useState(DEFAULT_CONFIG)
   const [stats, setStats] = useState(DEFAULT_STATS)
@@ -334,21 +337,94 @@ export default function App() {
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
 
-  useEffect(() => {
-    try {
-      setLogged(localStorage.getItem('mq_logged') === 'true')
-      const savedCards = localStorage.getItem('mq_cards')
-      const savedConfig = localStorage.getItem('mq_config')
-      const savedStats = localStorage.getItem('mq_stats')
-      const savedLastAnswered = localStorage.getItem('mq_last_answered')
-      if (savedLastAnswered) setLastAnsweredId(savedLastAnswered)
-      if (savedCards) setCards(JSON.parse(savedCards))
-      if (savedConfig) setConfig({ ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) })
-      if (savedStats) setStats(safeStats(JSON.parse(savedStats)))
-    } catch {
-      localStorage.removeItem('mq_stats')
+  async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats) {
+    if (!authedUser) return
+
+    setSyncStatus('Carregando progresso salvo...')
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('cards, stats')
+      .eq('id', authedUser.id)
+      .maybeSingle()
+
+    if (error) throw error
+
+    const hasCloudCards = Array.isArray(data?.cards) && data.cards.length > 0
+    const hasCloudStats = data?.stats && typeof data.stats === 'object'
+
+    if (hasCloudCards) setCards(data.cards)
+    if (hasCloudStats) setStats(safeStats(data.stats))
+
+    if (!hasCloudCards && !hasCloudStats) {
+      await supabase
+        .from('profiles')
+        .upsert({
+          id: authedUser.id,
+          email: authedUser.email,
+          cards: seedCards,
+          stats: seedStats
+        })
+      setSyncStatus('Progresso local enviado para sua conta.')
+      return
     }
-    setReady(true)
+
+    setSyncStatus('Progresso sincronizado.')
+  }
+
+  useEffect(() => {
+    let active = true
+
+    async function boot() {
+      let nextCards = DEFAULT_CARDS
+      let nextConfig = DEFAULT_CONFIG
+      let nextStats = DEFAULT_STATS
+      let nextLastAnswered = null
+
+      try {
+        const savedCards = localStorage.getItem('mq_cards')
+        const savedConfig = localStorage.getItem('mq_config')
+        const savedStats = localStorage.getItem('mq_stats')
+        const savedLastAnswered = localStorage.getItem('mq_last_answered')
+
+        if (savedCards) nextCards = JSON.parse(savedCards)
+        if (savedConfig) nextConfig = { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) }
+        if (savedStats) nextStats = safeStats(JSON.parse(savedStats))
+        if (savedLastAnswered) nextLastAnswered = savedLastAnswered
+      } catch {
+        localStorage.removeItem('mq_stats')
+      }
+
+      try {
+        const { data } = await supabase.auth.getSession()
+        const sessionUser = data.session?.user || null
+
+        if (active) {
+          setCards(nextCards)
+          setConfig(nextConfig)
+          setStats(nextStats)
+          if (nextLastAnswered) setLastAnsweredId(nextLastAnswered)
+        }
+
+        if (sessionUser) {
+          await loadCloudProgress(sessionUser, nextCards, nextStats)
+          if (active) {
+            setUser(sessionUser)
+            setLogged(true)
+          }
+        }
+      } catch (err) {
+        console.error(err)
+        if (active) {
+          setFeedback({ type: 'bad', text: 'NÃ£o consegui sincronizar seu progresso agora.' })
+        }
+      } finally {
+        if (active) setReady(true)
+      }
+    }
+
+    boot()
+    return () => { active = false }
   }, [])
 
   const dueCards = useMemo(() => cards.filter(c => !c.dueAt || c.dueAt <= Date.now()), [cards])
@@ -369,26 +445,25 @@ export default function App() {
   })
 
   useEffect(() => {
-  if (!ready || !logged) return
+  if (!ready || !logged || !user) return
 
   localStorage.setItem('mq_cards', JSON.stringify(cards))
 
   const saveCards = async () => {
-    const { data: userData } = await supabase.auth.getUser()
-    const user = userData?.user
-    if (!user) return
-
-    await supabase
+    setSyncStatus('Salvando progresso...')
+    const { error } = await supabase
       .from('profiles')
       .upsert({
         id: user.id,
         email: user.email,
         cards: cards
       })
+
+    setSyncStatus(error ? 'Erro ao salvar cards.' : 'Progresso salvo.')
   }
 
   saveCards()
-}, [cards, ready, logged])
+}, [cards, ready, logged, user])
 
   useEffect(() => {
     if (!ready) return
@@ -396,26 +471,25 @@ export default function App() {
   }, [config, ready])
 
   useEffect(() => {
-  if (!ready || !logged) return
+  if (!ready || !logged || !user) return
 
   localStorage.setItem('mq_stats', JSON.stringify(stats))
 
   const saveStats = async () => {
-    const { data: userData } = await supabase.auth.getUser()
-    const user = userData?.user
-    if (!user) return
-
-    await supabase
+    setSyncStatus('Salvando progresso...')
+    const { error } = await supabase
       .from('profiles')
       .upsert({
         id: user.id,
         email: user.email,
         stats: stats
       })
+
+    setSyncStatus(error ? 'Erro ao salvar estatÃ­sticas.' : 'Progresso salvo.')
   }
 
   saveStats()
-}, [stats, ready, logged])
+}, [stats, ready, logged, user])
 
   useEffect(() => {
     if (!ready || !logged) return
@@ -458,6 +532,90 @@ export default function App() {
     localStorage.removeItem('mq_logged')
     setLogged(false)
     setFeedback(null)
+    setSiteSeconds(0)
+    setCardSeconds(0)
+  }
+
+  async function cloudEnter() {
+    const email = login.trim()
+    if (!email || !senha) {
+      setFeedback({ type: 'bad', text: 'Digite email e senha.' })
+      return
+    }
+
+    setAuthLoading(true)
+    setFeedback(null)
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password: senha
+    })
+
+    if (error || !data.user) {
+      setAuthLoading(false)
+      setFeedback({ type: 'bad', text: 'Login ou senha invalidos.' })
+      return
+    }
+
+    try {
+      await loadCloudProgress(data.user)
+      setUser(data.user)
+      setLogged(true)
+      setSenha('')
+    } catch (err) {
+      console.error(err)
+      setFeedback({ type: 'bad', text: 'Entrei, mas nao consegui carregar o progresso salvo.' })
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  async function createAccount() {
+    const email = login.trim()
+    if (!email || senha.length < 6) {
+      setFeedback({ type: 'bad', text: 'Use um email e uma senha com pelo menos 6 caracteres.' })
+      return
+    }
+
+    setAuthLoading(true)
+    setFeedback(null)
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password: senha
+    })
+
+    if (error) {
+      setAuthLoading(false)
+      setFeedback({ type: 'bad', text: error.message || 'Nao consegui criar a conta.' })
+      return
+    }
+
+    if (!data.session || !data.user) {
+      setAuthLoading(false)
+      setFeedback({ type: 'good', text: 'Conta criada. Confirme seu email e depois entre novamente.' })
+      return
+    }
+
+    try {
+      await loadCloudProgress(data.user)
+      setUser(data.user)
+      setLogged(true)
+      setSenha('')
+    } catch (err) {
+      console.error(err)
+      setFeedback({ type: 'bad', text: 'Conta criada, mas nao consegui salvar o progresso inicial.' })
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  async function cloudLogout() {
+    await supabase.auth.signOut()
+    setUser(null)
+    setLogged(false)
+    setFeedback(null)
+    setSyncStatus('')
     setSiteSeconds(0)
     setCardSeconds(0)
   }
@@ -798,11 +956,13 @@ export default function App() {
         <section className="login-card">
           <div className="lock"><Lock size={34}/></div>
           <h1>MedQuest Anki Game</h1>
-          <p>Acesso restrito aos seus flashcards gamificados.</p>
-          <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Login" onKeyDown={e=> e.key === 'Enter' && enter()} />
-          <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && enter()} />
-          <button onClick={enter}>Entrar</button>
+          <p>Entre com sua conta para sincronizar os flashcards em todos os dispositivos.</p>
+          <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Email" type="email" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
+          <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
+          <button onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
+          <button className="secondary" onClick={createAccount} disabled={authLoading}>Criar conta</button>
           {feedback?.type === 'bad' && <div className="alert bad">{feedback.text}</div>}
+          {feedback?.type === 'good' && <div className="alert good">{feedback.text}</div>}
         </section>
       </main>
     )
@@ -815,9 +975,11 @@ export default function App() {
           <h1>MedQuest Anki Game</h1>
         </div>
         <div className="profile">
-          <button onClick={logout}><LogOut size={20}/> Sair</button>
+          <span>{user?.email}</span>
+          <button onClick={cloudLogout}><LogOut size={20}/> Sair</button>
         </div>
       </header>
+      {syncStatus && <div className="sync-status">{syncStatus}</div>}
 
       <nav className="tabs">
         <button className={tab==='study'?'active':''} onClick={()=>setTab('study')}><Brain size={18}/> Estudar</button>
