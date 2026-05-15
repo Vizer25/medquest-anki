@@ -1223,6 +1223,12 @@ export default function App() {
       return
     }
 
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      markCurrentAsCorrect()
+      return
+    }
+
     if (!event.altKey) return
     if (event.key === '.' || event.key === '>') {
       event.preventDefault()
@@ -1737,7 +1743,7 @@ export default function App() {
                   <div className="score-line">{feedback.text}</div>
                   <div className="feedback-actions">
                     <div className="pill">Agendamento: {feedback.scheduleLabel}</div>
-                    {feedback.percent < 80 && <button className="secondary" onClick={markCurrentAsCorrect}><CheckCircle2 size={18}/> Marcar como acerto</button>}
+                    {feedback.percent < 80 && <button className="secondary" onClick={markCurrentAsCorrect} title="Ctrl + Shift + A"><CheckCircle2 size={18}/> Marcar como acerto</button>}
                   </div>
                   <div className="answer-box">
                     <b>Resposta esperada:</b>
