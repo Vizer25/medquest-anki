@@ -550,6 +550,23 @@ export default function App() {
     if (!q) return true
     return normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
   })
+  const statsPanel = (
+    <>
+      <section className="stats">
+        <div><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
+        <div><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
+        <div><Flame/><span>Sequência atual</span><b>{stats.streak}</b></div>
+        <div><CalendarDays/><span>Dias seguidos</span><b>{stats.studyStreak}</b></div>
+        <div><ListChecks/><span>Feitos hoje</span><b>{todayDone}</b></div>
+        <div><Clock/><span>Faltam hoje</span><b>{remainingToday}</b></div>
+        <div><Clock/><span>Tempo</span><b>{formatTime(cardSeconds)}</b></div>
+        <div><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
+        <div><ImageIcon/><span>Total no deck</span><b>{cards.length}</b></div>
+        <div><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
+      </section>
+      <div className="bar"><div style={{width: `${progress}%`}} /></div>
+    </>
+  )
 
   useEffect(() => {
   if (!ready || !logged || !user) return
@@ -852,7 +869,7 @@ export default function App() {
 
     setFeedback({
       cardId: current.id,
-      type: isCorrect ? 'good' : 'bad',
+      type: percent >= 80 ? 'good' : percent >= 60 ? 'medium' : 'bad',
       grade,
       percent,
       text: `Você acertou ${percent}% da resposta em ${formatTime(cardSeconds)}.`,
@@ -1161,6 +1178,8 @@ export default function App() {
         <button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}><Settings size={18}/> Configurações</button>
       </nav>
 
+      {tab !== 'study' && (
+      <>
       <section className="stats">
         <div><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
         <div><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
@@ -1175,9 +1194,12 @@ export default function App() {
       </section>
 
       <div className="bar"><div style={{width: `${progress}%`}} /></div>
+      </>
+      )}
 
       {tab === 'study' && (
-        <section className="card">
+        <>
+        <section className="card study-card">
           <div className="study-filters">
             <label>
               Revisar tag
@@ -1251,6 +1273,8 @@ export default function App() {
             </>
           )}
         </section>
+        <div className="stats-below">{statsPanel}</div>
+        </>
       )}
 
       {tab === 'cards' && (

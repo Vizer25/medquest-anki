@@ -17,6 +17,7 @@ button,.import{border:0;background:#2563eb;color:white;padding:15px 22px;border-
 .alert,.feedback{margin-top:20px;padding:16px;border-radius:14px;font-weight:800}
 .bad{background:#fff3f1;color:#a53a2d;border:1px solid #ffd8d2}
 .good{background:#ebf8f1;color:#167047;border:1px solid #c4edd8}
+.medium{background:#fffaeb;color:#b54708;border:1px solid #fedf89}
 .info{background:#f2f4f7;color:#101828}
 .app{max-width:1320px;margin:0 auto;padding:52px 26px}
 .top{display:flex;justify-content:space-between;gap:24px;align-items:center;margin-bottom:24px}
@@ -37,6 +38,8 @@ h1{font-size:48px;color:#101828;margin:0}
 .bar{height:12px;background:white;border:1px solid #e5e7eb;border-radius:99px;overflow:hidden;margin-bottom:28px}
 .bar div{height:100%;background:#2563eb}
 .card{background:white;border-radius:16px;padding:34px;box-shadow:0 22px 70px #1018280e;border:1px solid #e5e7eb}
+.study-card{margin-bottom:28px}
+.stats-below{margin-top:28px}
 .card-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#667085;font-size:18px;margin-bottom:26px}
 .question-html{font-size:29px;font-weight:850;line-height:1.35;margin-bottom:20px}
 .question-html img,.answer-box img,.mini img{max-width:100%;max-height:320px;border-radius:10px;margin:12px 0;border:1px solid #e5e7eb}
