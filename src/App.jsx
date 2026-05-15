@@ -5,7 +5,7 @@ import initSqlJs from 'sql.js'
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import {
   Trophy, XCircle, Flame, Target, Star, LogOut, RotateCcw, Upload,
-  CheckCircle2, Eye, CalendarDays, ListChecks, Clock, Settings, ImageIcon,
+  CheckCircle2, Eye, ListChecks, Settings, ImageIcon,
   Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle, Scissors
 } from 'lucide-react'
 const supabase = createClient(
@@ -747,8 +747,6 @@ export default function App() {
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
   const avgTime = totalAnswered ? Math.round(Number(stats.totalAnswerSeconds || 0) / totalAnswered) : 0
-  const dailyValues = Object.entries(stats.daily || {}).slice(-14)
-  const maxDaily = Math.max(1, ...dailyValues.map(([, value]) => Number(value || 0)))
   const progress = Math.min(100, Number(stats.xp || 0) % 100)
   const masteryEntries = activeCards.map(card => Number(stats.masteryByCard?.[card.id]?.bestPercent || 0))
   const masteryAverage = activeCards.length ? Math.round(masteryEntries.reduce((sum, value) => sum + value, 0) / activeCards.length) : 0
@@ -787,19 +785,24 @@ export default function App() {
   })
   const statsPanel = (
     <>
-      <section className="stats">
-        <div><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
-        <div><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
-        <div><Flame/><span>Sequência atual</span><b>{stats.streak}</b></div>
-        <div><CalendarDays/><span>Dias seguidos</span><b>{stats.studyStreak}</b></div>
-        <div><ListChecks/><span>Feitos hoje</span><b>{todayDone}</b></div>
-        <div><Clock/><span>Faltam hoje</span><b>{remainingToday}</b></div>
-        <div><Clock/><span>Tempo</span><b>{formatTime(cardSeconds)}</b></div>
-        <div><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
-        <div><ImageIcon/><span>Total no deck</span><b>{activeCards.length}</b></div>
-        <div><Target/><span>Domínio do deck</span><b>{masteryAverage}%</b></div>
-        <div><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
+      <section className="stats stats-summary">
+        <div className="stat-card stat-today"><ListChecks/><span>Feitos hoje</span><b>{todayDone}</b><small>{remainingToday} para a meta</small></div>
+        <div className="stat-card"><Target/><span>Total de cards feitos</span><b>{totalAnswered}</b></div>
+        <div className="stat-card"><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
+        <div className="stat-card"><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
+        <div className="stat-card"><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
+        <div className="stat-card stat-streak"><Flame/><span>Streak</span><b>{stats.studyStreak}</b><small>{stats.streak} acertos seguidos</small></div>
+        <div className="stat-card"><ImageIcon/><span>Total no deck</span><b>{activeCards.length}</b></div>
+        <div className="stat-card"><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
       </section>
+      {tab === 'stats' && (
+        <section className="grade-strip">
+          <div className="grade-bad"><b>{stats.byGrade.again}</b><span>0-59%</span><i style={{width: `${Math.min(100, ((stats.byGrade.again || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+          <div className="grade-mid"><b>{stats.byGrade.hard}</b><span>60-79%</span><i style={{width: `${Math.min(100, ((stats.byGrade.hard || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+          <div className="grade-ok"><b>{stats.byGrade.good}</b><span>80-89%</span><i style={{width: `${Math.min(100, ((stats.byGrade.good || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+          <div className="grade-ok"><b>{stats.byGrade.easy}</b><span>90-100%</span><i style={{width: `${Math.min(100, ((stats.byGrade.easy || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+        </section>
+      )}
       <div className="bar"><div style={{width: `${progress}%`}} /></div>
     </>
   )
@@ -1737,22 +1740,7 @@ export default function App() {
       </nav>
 
       {tab !== 'study' && (
-      <>
-      <section className="stats">
-        <div><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
-        <div><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
-        <div><Flame/><span>Sequência atual</span><b>{stats.streak}</b></div>
-        <div><CalendarDays/><span>Dias seguidos</span><b>{stats.studyStreak}</b></div>
-        <div><ListChecks/><span>Feitos hoje</span><b>{todayDone}</b></div>
-        <div><Clock/><span>Faltam hoje</span><b>{remainingToday}</b></div>
-        <div><Clock/><span>Tempo</span><b>{formatTime(cardSeconds)}</b></div>
-        <div><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
-        <div><ImageIcon/><span>Total no deck</span><b>{activeCards.length}</b></div>
-        <div><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
-      </section>
-
-      <div className="bar"><div style={{width: `${progress}%`}} /></div>
-      </>
+        statsPanel
       )}
 
       {tab === 'study' && (
@@ -1995,7 +1983,6 @@ export default function App() {
                 : `Faltam ${masteryGap} pontos percentuais para atingir 80% de domínio geral.`}
               {recentTrend != null && ` Nas últimas 50 respostas, sua média ficou em ${recentAverage}% (${recentTrend >= 0 ? '+' : ''}${recentTrend} pontos vs. as 50 anteriores).`}
             </p>
-            <p className="hint">O streak só conta nos dias com pelo menos {STREAK_MIN_CARDS} cards respondidos.</p>
             <div className="mastery-breakdown">
               <div className="mastery-ok"><b>{masteredCount}</b><span>Cards dominados<br/>80-100%</span></div>
               <div className="mastery-mid"><b>{partialCount}</b><span>Em progresso<br/>60-79%</span></div>
@@ -2014,12 +2001,11 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              <p className="chart-note">Linha mental: 10 cards/dia para manter streak.</p>
             </div>
             <div className="chart-box">
               <h4>Acurácia diária</h4>
               <div className="accuracy-chart">
-                {performanceDays.map(day => (
+                {performanceDays.slice().reverse().map(day => (
                   <div className="accuracy-row" key={day.key}>
                     <span>{day.label}</span>
                     <div><i style={{width: `${day.avgPercent}%`}} className={day.avgPercent >= 80 ? 'good-line' : day.avgPercent >= 60 ? 'mid-line' : 'bad-line'} /></div>
@@ -2030,30 +2016,9 @@ export default function App() {
             </div>
           </div>
           <div className="advanced-grid">
-            <div className="advanced-box"><span>Precisão geral</span><b>{accuracy}%</b><small>{stats.correct} acertos de {totalAnswered}</small></div>
             <div className="advanced-box"><span>Tempo médio</span><b>{formatTime(avgTime)}</b><small>Total: {formatTime(stats.totalAnswerSeconds)}</small></div>
             <div className="advanced-box"><span>Mais rápido</span><b>{stats.fastestSeconds == null ? '--' : formatTime(stats.fastestSeconds)}</b><small>Menor tempo</small></div>
             <div className="advanced-box"><span>Mais lento</span><b>{formatTime(stats.slowestSeconds)}</b><small>Maior tempo</small></div>
-          </div>
-
-          <h3>Distribuição por desempenho</h3>
-          <div className="grade-grid">
-            <div className="grade-bad"><b>{stats.byGrade.again}</b><span>Vermelho<br/>0-59%</span><i style={{width: `${Math.min(100, ((stats.byGrade.again || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
-            <div className="grade-mid"><b>{stats.byGrade.hard}</b><span>Amarelo<br/>60-79%</span><i style={{width: `${Math.min(100, ((stats.byGrade.hard || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
-            <div className="grade-ok"><b>{stats.byGrade.good}</b><span>Verde<br/>80-89%</span><i style={{width: `${Math.min(100, ((stats.byGrade.good || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
-            <div className="grade-ok"><b>{stats.byGrade.easy}</b><span>Verde+<br/>90-100%</span><i style={{width: `${Math.min(100, ((stats.byGrade.easy || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
-          </div>
-
-          <h3>Produtividade dos últimos 14 dias</h3>
-          <div className="daily-chart">
-            {dailyValues.length === 0 && <p className="hint">Ainda não há histórico diário.</p>}
-            {dailyValues.map(([day, value]) => (
-              <div className="day-row" key={day}>
-                <span>{day.slice(5).replace('-', '/')}</span>
-                <div className="day-bar"><i style={{width: `${Math.max(4, (Number(value) / maxDaily) * 100)}%`}} /></div>
-                <b>{value}</b>
-              </div>
-            ))}
           </div>
 
           <h3>Últimas respostas</h3>
