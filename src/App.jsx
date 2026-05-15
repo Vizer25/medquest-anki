@@ -6,7 +6,7 @@ import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import {
   Trophy, XCircle, Flame, Target, Star, LogOut, Lock, RotateCcw, Upload,
   CheckCircle2, Eye, CalendarDays, ListChecks, Clock, Settings, ImageIcon,
-  Brain, BarChart3, Plus, Download
+  Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle
 } from 'lucide-react'
 const supabase = createClient(
   'https://lgmfmdpzmqunouysuwjp.supabase.co',
@@ -675,23 +675,26 @@ export default function App() {
     return () => { active = false }
   }, [])
 
+  const activeCards = useMemo(() => cards.filter(card => !card.deleted), [cards])
+  const suspendedCount = activeCards.filter(card => card.suspended).length
+  const deletedCount = cards.filter(card => card.deleted).length
   const allTags = useMemo(() => {
     const tags = new Set()
-    cards.forEach(card => {
+    activeCards.forEach(card => {
       String(card.tags || '').split(/\s+/).map(t => t.trim()).filter(Boolean).forEach(t => tags.add(t))
     })
     return Array.from(tags).sort((a, b) => a.localeCompare(b))
-  }, [cards])
+  }, [activeCards])
   const focusedCards = useMemo(() => {
     const ids = new Set(focusedCardIds)
-    return cards.filter(c => ids.has(c.id))
-  }, [cards, focusedCardIds])
+    return activeCards.filter(c => ids.has(c.id))
+  }, [activeCards, focusedCardIds])
   const dueCards = useMemo(() => {
     const base = focusedCards.length
       ? focusedCards
-      : cards.filter(c => !studyTag || String(c.tags || '').split(/\s+/).includes(studyTag))
+      : activeCards.filter(c => !c.suspended && (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)))
     return focusedCards.length ? base : base.filter(c => !c.dueAt || c.dueAt <= Date.now())
-  }, [cards, focusedCards, studyTag])
+  }, [activeCards, focusedCards, studyTag])
   const current = dueCards.length ? dueCards[index % dueCards.length] : null
   const currentView = current ? getCardView(current) : null
   const todayDone = stats.daily?.[todayKey()] || 0
@@ -702,11 +705,11 @@ export default function App() {
   const dailyValues = Object.entries(stats.daily || {}).slice(-14)
   const maxDaily = Math.max(1, ...dailyValues.map(([, value]) => Number(value || 0)))
   const progress = Math.min(100, Number(stats.xp || 0) % 100)
-  const masteryEntries = cards.map(card => Number(stats.masteryByCard?.[card.id]?.bestPercent || 0))
-  const masteryAverage = cards.length ? Math.round(masteryEntries.reduce((sum, value) => sum + value, 0) / cards.length) : 0
+  const masteryEntries = activeCards.map(card => Number(stats.masteryByCard?.[card.id]?.bestPercent || 0))
+  const masteryAverage = activeCards.length ? Math.round(masteryEntries.reduce((sum, value) => sum + value, 0) / activeCards.length) : 0
   const masteredCount = masteryEntries.filter(value => value >= 80).length
   const partialCount = masteryEntries.filter(value => value >= 60 && value < 80).length
-  const weakCount = Math.max(0, cards.length - masteredCount - partialCount)
+  const weakCount = Math.max(0, activeCards.length - masteredCount - partialCount)
   const masteryGap = Math.max(0, 80 - masteryAverage)
   const recentHistory = (stats.history || []).slice(-50)
   const previousHistory = (stats.history || []).slice(-100, -50)
@@ -732,7 +735,7 @@ export default function App() {
     pendingGrade?.cardId === current.id ||
     feedback?.cardId === current.id
   )
-  const filteredCards = cards.filter(c => {
+  const filteredCards = activeCards.filter(c => {
     const q = normalize(searchTerm)
     if (!q) return true
     return normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
@@ -748,7 +751,7 @@ export default function App() {
         <div><Clock/><span>Faltam hoje</span><b>{remainingToday}</b></div>
         <div><Clock/><span>Tempo</span><b>{formatTime(cardSeconds)}</b></div>
         <div><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
-        <div><ImageIcon/><span>Total no deck</span><b>{cards.length}</b></div>
+        <div><ImageIcon/><span>Total no deck</span><b>{activeCards.length}</b></div>
         <div><Target/><span>Domínio do deck</span><b>{masteryAverage}%</b></div>
         <div><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
       </section>
@@ -1212,6 +1215,56 @@ export default function App() {
     setTab('study')
   }
 
+  function editCardFromLibrary(cardId) {
+    const card = activeCards.find(c => c.id === cardId)
+    if (!card) return
+    const v = getCardView(card)
+    setFocusedCardIds([cardId])
+    setStudyTag('')
+    setIndex(0)
+    setAnswer('')
+    setFeedback(null)
+    setPendingGrade(null)
+    setEditFront(v.htmlFront || v.pergunta || '')
+    setEditBack(v.htmlBack || v.resposta || '')
+    setEditing(true)
+    setTab('study')
+  }
+
+  function toggleSuspendCard(cardId) {
+    let suspended = false
+    setCards(prev => prev.map(card => {
+      if (card.id !== cardId) return card
+      suspended = !card.suspended
+      return {
+        ...card,
+        suspended,
+        suspendedAt: suspended ? new Date().toISOString() : null,
+        dueAt: suspended ? card.dueAt : Date.now(),
+        manualEditedAt: new Date().toISOString()
+      }
+    }))
+    setImportLog(suspended ? 'Card suspenso. Ele nao aparecera nas revisoes normais.' : 'Card reativado. Ele voltou para as revisoes.')
+  }
+
+  function deleteCardFromLibrary(cardId) {
+    const card = activeCards.find(c => c.id === cardId)
+    if (!card) return
+    const ok = window.confirm('Excluir este flashcard da biblioteca? Ele nao aparecera nas revisoes e nao voltara em novas importacoes do Anki.')
+    if (!ok) return
+    setCards(prev => prev.map(c => c.id === cardId ? {
+      ...c,
+      deleted: true,
+      deletedAt: new Date().toISOString(),
+      manualEditedAt: new Date().toISOString()
+    } : c))
+    if (lastAnsweredId === cardId) setLastAnsweredId(null)
+    setFocusedCardIds(prev => prev.filter(id => id !== cardId))
+    setFeedback(prev => prev?.cardId === cardId ? null : prev)
+    setPendingGrade(prev => prev?.cardId === cardId ? null : prev)
+    setImportLog('Card excluido da biblioteca.')
+  }
+
   function clearStudyFilter() {
     setFocusedCardIds([])
     setStudyTag('')
@@ -1236,7 +1289,7 @@ export default function App() {
       '#columns:Frente\tVerso\tTags'
     ].join('\n')
 
-    const rows = cards.map(card => {
+    const rows = activeCards.map(card => {
       const v = getCardView(card)
       return [
         tsvCell(v.htmlFront || v.pergunta),
@@ -1253,7 +1306,7 @@ export default function App() {
     a.download = `medquest-cards-${todayKey()}.txt`
     a.click()
     URL.revokeObjectURL(url)
-    setImportLog(`${cards.length} cards exportados para importar no Anki.`)
+    setImportLog(`${activeCards.length} cards exportados para importar no Anki.`)
   }
 
   function importCSV(e) {
@@ -1265,7 +1318,7 @@ export default function App() {
       if (imported.length) {
         setCards(prev => {
           const result = mergeImportedCards(prev, imported)
-          setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.length}.`)
+          setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
           return result.merged
         })
         setIndex(0)
@@ -1334,7 +1387,7 @@ export default function App() {
 
       setCards(prev => {
         const result = mergeImportedCards(prev, imported)
-        setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.length}.`)
+        setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
         return result.merged
       })
       setIndex(0)
@@ -1405,7 +1458,7 @@ export default function App() {
         <div><Clock/><span>Faltam hoje</span><b>{remainingToday}</b></div>
         <div><Clock/><span>Tempo</span><b>{formatTime(cardSeconds)}</b></div>
         <div><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
-        <div><ImageIcon/><span>Total no deck</span><b>{cards.length}</b></div>
+        <div><ImageIcon/><span>Total no deck</span><b>{activeCards.length}</b></div>
         <div><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
       </section>
 
@@ -1495,7 +1548,7 @@ export default function App() {
 
       {tab === 'cards' && (
         <section className="card">
-          <h2>Visualizar flashcards</h2>
+          <h2>Biblioteca de flashcards</h2>
           <input
             value={searchTerm}
             onChange={e=>setSearchTerm(e.target.value)}
@@ -1518,17 +1571,25 @@ export default function App() {
               </button>
             ))}
           </div>
-          <p className="hint">{filteredCards.length} de {cards.length} flashcards encontrados.</p>
+          <p className="hint">{filteredCards.length} de {activeCards.length} flashcards encontrados. Suspensos: {suspendedCount}. Excluidos preservados: {deletedCount}.</p>
           <div className="grid-cards">
             {filteredCards.map((c, i) => {
               const v = getCardView(c)
               return (
-                <div className="mini" key={c.id}>
+                <div className={`mini ${c.suspended ? 'suspended' : ''}`} key={c.id}>
+                  {c.suspended && <span className="status-chip">Suspenso</span>}
                   <b>{i+1}. {v.pergunta}</b>
                   <div dangerouslySetInnerHTML={{__html: v.htmlFront || v.pergunta}} />
                   <p><b>Resposta:</b> {v.resposta}</p>
-                  <button className="secondary" onClick={() => studySingleCard(c.id)}>Revisar este card</button>
-                  <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.reps || 0} | Acertos: {v.correctCount || 0} | Próxima revisão: {new Date(v.dueAt || Date.now()).toLocaleString('pt-BR')}</small>
+                  <div className="library-actions">
+                    <button className="secondary" onClick={() => studySingleCard(c.id)}><Eye size={16}/> Revisar</button>
+                    <button className="secondary" onClick={() => editCardFromLibrary(c.id)}><Pencil size={16}/> Editar</button>
+                    <button className="secondary" onClick={() => toggleSuspendCard(c.id)}>
+                      {c.suspended ? <PlayCircle size={16}/> : <PauseCircle size={16}/>} {c.suspended ? 'Reativar' : 'Suspender'}
+                    </button>
+                    <button className="danger-button" onClick={() => deleteCardFromLibrary(c.id)}><Trash2 size={16}/> Excluir</button>
+                  </div>
+                  <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.reps || 0} | Acertos: {v.correctCount || 0} | Proxima revisao: {new Date(v.dueAt || Date.now()).toLocaleString('pt-BR')}</small>
                 </div>
               )
             })}

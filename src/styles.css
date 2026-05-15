@@ -60,7 +60,12 @@ textarea{min-height:160px;resize:vertical}
 .timer-chip{background:#eff6ff;color:#2563eb}
 .grid-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:18px}
 .mini{background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px}
+.mini.suspended{background:#fff8e6;border-color:#fedf89}
 .mini small{display:block;color:#667085;margin-top:8px}
+.library-actions{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+.library-actions button{padding:10px 12px;font-size:14px}
+.danger-button{background:#fef3f2;color:#b42318;border:1px solid #fecdca}
+.status-chip{display:inline-flex;margin-bottom:10px;background:#fffaeb;color:#b54708;border:1px solid #fedf89;border-radius:999px;padding:6px 10px;font-weight:900;font-size:13px}
 .settings-grid,.advanced-grid,.grade-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
 .settings-grid{grid-template-columns:repeat(2,1fr)}
 .settings-grid label{font-weight:800}
