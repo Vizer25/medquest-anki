@@ -6,7 +6,7 @@ import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import {
   Trophy, XCircle, Flame, Target, Star, LogOut, Lock, RotateCcw, Upload,
   CheckCircle2, Eye, CalendarDays, ListChecks, Clock, Settings, ImageIcon,
-  Brain, BarChart3, Plus
+  Brain, BarChart3, Plus, Download
 } from 'lucide-react'
 const supabase = createClient(
   'https://lgmfmdpzmqunouysuwjp.supabase.co',
@@ -253,6 +253,7 @@ function mergeImportedCards(oldCards, importedCards) {
   const oldByKey = new Map(oldCards.map(c => [stableCardKey(c), c]))
   let added = 0
   let updated = 0
+  let preservedEdited = 0
 
   const merged = [...oldCards]
 
@@ -264,6 +265,20 @@ function mergeImportedCards(oldCards, importedCards) {
     if (existing) {
       const index = merged.findIndex(c => c.id === existing.id)
       if (index >= 0) {
+        if (existing.manualEditedAt) {
+          merged[index] = {
+            ...existing,
+            tags: newCard.tags,
+            cardType: newCard.cardType,
+            interval: newCard.interval,
+            ease: newCard.ease,
+            ankiDue: newCard.ankiDue,
+            sourceUpdatedAt: new Date().toISOString()
+          }
+          updated += 1
+          preservedEdited += 1
+          return
+        }
         merged[index] = {
           ...existing,
           // Atualiza texto/mídia caso o deck tenha sido corrigido no Anki,
@@ -289,7 +304,7 @@ function mergeImportedCards(oldCards, importedCards) {
     }
   })
 
-  return { merged, added, updated }
+  return { merged, added, updated, preservedEdited }
 }
 
 
@@ -889,6 +904,7 @@ export default function App() {
       interval: 0,
       ease: 2500,
       tags: 'manual',
+      manualEditedAt: new Date().toISOString(),
       palavras: normalize(built.resposta || newBack).split(' ').filter(w => w.length > 3).slice(0, 12)
     }
 
@@ -932,6 +948,7 @@ export default function App() {
       resposta,
       htmlFront: editFront,
       htmlBack: editBack,
+      manualEditedAt: new Date().toISOString(),
       palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
     } : c))
     if (feedback?.cardId === editingCardId) {
@@ -943,6 +960,40 @@ export default function App() {
     setEditing(false)
   }
 
+  function tsvCell(value) {
+    return String(value || '')
+      .replace(/\t/g, ' ')
+      .replace(/\r?\n/g, '<br>')
+      .trim()
+  }
+
+  function exportToAnki() {
+    const header = [
+      '#separator:tab',
+      '#html:true',
+      '#columns:Frente\tVerso\tTags'
+    ].join('\n')
+
+    const rows = cards.map(card => {
+      const v = getCardView(card)
+      return [
+        tsvCell(v.htmlFront || v.pergunta),
+        tsvCell(v.htmlBack || v.resposta),
+        tsvCell(v.tags || '')
+      ].join('\t')
+    })
+
+    const content = `${header}\n${rows.join('\n')}`
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `medquest-cards-${todayKey()}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+    setImportLog(`${cards.length} cards exportados para importar no Anki.`)
+  }
+
   function importCSV(e) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -952,7 +1003,7 @@ export default function App() {
       if (imported.length) {
         setCards(prev => {
           const result = mergeImportedCards(prev, imported)
-          setImportLog(`${result.added} cards novos adicionados; ${result.updated} antigos preservados/atualizados por CSV.`)
+          setImportLog(`${result.added} cards novos adicionados; ${result.updated} antigos encontrados; ${result.preservedEdited} edições do site preservadas por CSV.`)
           return result.merged
         })
         setIndex(0)
@@ -1018,7 +1069,7 @@ export default function App() {
 
       setCards(prev => {
         const result = mergeImportedCards(prev, imported)
-        setImportLog(`${result.added} cards novos adicionados; ${result.updated} antigos preservados/atualizados. Mídias encontradas: ${Object.keys(mediaMap).length}.`)
+        setImportLog(`${result.added} cards novos adicionados; ${result.updated} antigos encontrados; ${result.preservedEdited} edições do site preservadas. Mídias encontradas: ${Object.keys(mediaMap).length}.`)
         return result.merged
       })
       setIndex(0)
@@ -1171,6 +1222,7 @@ export default function App() {
           <div className="actions">
             <label className="import"><Upload size={18}/> Importar .APKG<input type="file" accept=".apkg" onChange={importAPKG}/></label>
             <label className="import dark"><Upload size={18}/> Importar CSV<input type="file" accept=".csv,.txt" onChange={importCSV}/></label>
+            <button className="secondary" onClick={exportToAnki}><Download size={18}/> Exportar para Anki</button>
           </div>
           {importLog && <div className="alert info">{importLog}</div>}
         </section>
