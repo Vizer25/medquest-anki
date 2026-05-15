@@ -42,12 +42,15 @@ h1{font-size:48px;color:#101828;margin:0}
 .bar div{height:100%;background:#2563eb}
 .card{background:white;border-radius:16px;padding:34px;box-shadow:0 22px 70px #1018280e;border:1px solid #e5e7eb}
 .study-card{margin-bottom:28px}
+.study-card.card{padding:26px 34px}
 .stats-below{margin-top:28px}
-.card-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#667085;font-size:18px;margin-bottom:26px}
-.question-html{font-size:29px;font-weight:850;line-height:1.35;margin-bottom:20px}
+.card-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#667085;font-size:16px;margin-bottom:16px}
+.question-html{font-size:23px;font-weight:850;line-height:1.3;margin-bottom:14px}
 .question-html img,.answer-box img,.mini img{max-width:100%;max-height:320px;border-radius:10px;margin:12px 0;border:1px solid #e5e7eb}
-textarea{min-height:160px;resize:vertical}
+textarea{min-height:150px;resize:vertical}
 .actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:14px}
+.study-card .actions{margin-top:8px}
+.study-card .actions button{padding:12px 18px;font-size:16px}
 .secondary{background:#f2f4f7;color:#101828}
 .import{background:#101828;position:relative;overflow:hidden}
 .import.dark{background:#475467}
@@ -56,10 +59,11 @@ textarea{min-height:160px;resize:vertical}
 .hint{margin-top:22px;color:#667085;background:#f9fafb;padding:14px;border-radius:10px}
 .score-line{font-size:20px;margin-bottom:14px}
 .answer-box{background:white;border-radius:10px;padding:14px;margin-top:10px;color:#111827;border:1px solid #e5e7eb}
-.answer-entry{display:grid;gap:10px}
-.answer-tools{display:flex;gap:8px}
-.answer-tools button{width:44px;height:40px;padding:0;justify-content:center;font-size:22px}
-.pill,.timer-chip{display:inline-block;background:white;border:1px solid #e5e7eb;padding:8px 12px;border-radius:999px;color:#101828;font-weight:900}
+.answer-entry{display:grid;gap:6px}
+.answer-entry textarea{min-height:118px;font-size:17px;line-height:1.45;padding:14px 16px;margin:4px 0 8px}
+.answer-tools{display:flex;gap:6px;justify-content:flex-end}
+.answer-tools button{width:30px;height:28px;padding:0;justify-content:center;font-size:17px;border-radius:7px;background:#f2f4f7;color:#101828;border:1px solid #e5e7eb}
+.pill,.timer-chip{display:inline-block;background:white;border:1px solid #e5e7eb;padding:7px 11px;border-radius:999px;color:#101828;font-weight:900}
 .timer-chip{background:#eff6ff;color:#2563eb}
 .grid-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:18px}
 .mini{background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px}
@@ -145,6 +149,7 @@ textarea{min-height:160px;resize:vertical}
   .chart-grid,.mastery-breakdown{grid-template-columns:1fr}
   h1{font-size:36px}
   .question-html{font-size:24px}
+  .study-card.card{padding:22px}
   .history-item{grid-template-columns:1fr}
   .history-item small{grid-column:1}
   .split-part{grid-template-columns:1fr}
