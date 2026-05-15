@@ -152,18 +152,49 @@ function safeStats(raw) {
 
 const STOP_WORDS = new Set([
   'a','ao','aos','as','com','como','da','das','de','do','dos','e','em','entre','na','nas','no','nos','o','os','ou','para','por','que','se','sem','um','uma','uns','umas',
-  'qual','quais','quando','onde','paciente','conduta','tratamento','diagnostico','diagnostico','indica','indicado','indicada'
+  'qual','quais','quando','onde','paciente','conduta','tratamento','diagnostico','diagnostico','indica','indicado','indicada',
+  'iniciar','inicio','pode','podendo','caso','necessario','necessaria','realizar','fazer','usar','uso','apenas'
 ])
+
+const MEDICAL_ALIASES = [
+  ['dm2', ['diabetes tipo 2', 'diabetes mellitus tipo 2', 'diabetes melito tipo 2', 'diabetes do tipo 2']],
+  ['dm1', ['diabetes tipo 1', 'diabetes mellitus tipo 1', 'diabetes melito tipo 1', 'diabetes do tipo 1']],
+  ['hap', ['hiperaldosteronismo primario', 'hiperaldosteronismo primaria']],
+  ['lada', ['latent autoimmune diabetes in adults', 'diabetes autoimune latente do adulto']],
+  ['tv', ['taquicardia ventricular']],
+  ['fa', ['fibrilacao atrial']],
+  ['iam', ['infarto agudo do miocardio', 'infarto agudo miocardio']],
+  ['ic', ['insuficiencia cardiaca']],
+  ['pa', ['pressao arterial']],
+  ['drc', ['doenca renal cronica']],
+  ['tep', ['tromboembolismo pulmonar']],
+  ['avc', ['acidente vascular cerebral']]
+]
+
+function canonicalizeMedicalText(text) {
+  let out = normalize(text)
+    .replace(/\b(\d+)\s*j\b/g, '$1 joule')
+    .replace(/\b(\d+)\s*-\s*(\d+)\s*j\b/g, '$1 $2 joule')
+
+  MEDICAL_ALIASES.forEach(([canonical, aliases]) => {
+    aliases.forEach(alias => {
+      const normalizedAlias = normalize(alias).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      out = out.replace(new RegExp(`\\b${normalizedAlias}\\b`, 'g'), canonical)
+    })
+  })
+
+  return out
+}
 
 function lightStem(word) {
   return String(word || '')
     .replace(/(oes|aes|ais|eis|is|ns)$/g, '')
-    .replace(/(mente|idade|idades|acao|acoes|ico|ica|icos|icas|ado|ada|ados|adas)$/g, '')
+    .replace(/(mente|idade|idades|acao|acoes|avel|ivel|ico|ica|icos|icas|ado|ada|ados|adas)$/g, '')
     .replace(/(s)$/g, '')
 }
 
 function answerTokens(text) {
-  return normalize(text)
+  return canonicalizeMedicalText(text)
     .split(' ')
     .map(lightStem)
     .filter(w => w.length > 2 && !STOP_WORDS.has(w))
@@ -191,13 +222,32 @@ function tokenMatches(expected, userTokens) {
   })
 }
 
+function extractNumbers(text) {
+  return (canonicalizeMedicalText(text).match(/\b\d+(?:\.\d+)?\b/g) || []).map(Number)
+}
+
+function numberMatches(expected, userNumbers) {
+  return userNumbers.some(user => {
+    if (user === expected) return true
+    const diff = Math.abs(user - expected)
+    const tolerance = expected >= 50 ? expected * 0.25 : 0
+    return tolerance > 0 && diff <= tolerance
+  })
+}
+
 function semanticScore(expectedText, userText) {
   const expectedTokens = [...new Set(answerTokens(expectedText))]
   const userTokens = [...new Set(answerTokens(userText))]
+  const expectedNumbers = [...new Set(extractNumbers(expectedText))]
+  const userNumbers = [...new Set(extractNumbers(userText))]
   if (!expectedTokens.length) return 0
-  if (normalize(userText).includes(normalize(expectedText))) return 100
+  if (canonicalizeMedicalText(userText).includes(canonicalizeMedicalText(expectedText))) return 100
   const hits = expectedTokens.filter(token => tokenMatches(token, userTokens)).length
-  return Math.round((hits / expectedTokens.length) * 100)
+  const conceptScore = hits / expectedTokens.length
+  const numberScore = expectedNumbers.length
+    ? expectedNumbers.filter(number => numberMatches(number, userNumbers)).length / expectedNumbers.length
+    : conceptScore
+  return Math.round(((conceptScore * 0.75) + (numberScore * 0.25)) * 100)
 }
 
 function splitCSVLine(line) {
