@@ -1247,16 +1247,17 @@ export default function App() {
       if (imported.length) {
         setCards(prev => {
           const result = mergeImportedCards(prev, imported)
-          setImportLog(`${result.added} cards novos adicionados; ${result.updated} antigos encontrados; ${result.preservedEdited} edições do site preservadas por CSV.`)
+          setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.length}.`)
           return result.merged
         })
         setIndex(0)
-        setTab('study')
       } else {
-        setImportLog('Não consegui ler o CSV. Use: pergunta;resposta;imagem(opcional)')
+        setImportLog('Nao consegui ler o CSV. Use: pergunta;resposta;imagem(opcional)')
       }
     }
+    reader.onerror = () => setImportLog('Erro ao ler o arquivo CSV. Tente exportar novamente e importar de novo.')
     reader.readAsText(file, 'utf-8')
+    if (e.target) e.target.value = ''
   }
 
   async function importAPKG(e) {
@@ -1315,11 +1316,10 @@ export default function App() {
 
       setCards(prev => {
         const result = mergeImportedCards(prev, imported)
-        setImportLog(`${result.added} cards novos adicionados; ${result.updated} antigos encontrados; ${result.preservedEdited} edições do site preservadas. Mídias encontradas: ${Object.keys(mediaMap).length}.`)
+        setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.length}.`)
         return result.merged
       })
       setIndex(0)
-      setTab('study')
     } catch (err) {
       console.error(err)
       setImportLog(`Erro ao importar APKG: ${err.message || String(err)}`)
@@ -1361,6 +1361,11 @@ export default function App() {
         </div>
       </header>
       {syncStatus && <div className="sync-status">{syncStatus}</div>}
+      {importLog && (
+        <div className={`import-status ${importLog.startsWith('Erro') || importLog.startsWith('Nao') ? 'bad' : 'good'}`}>
+          {importLog}
+        </div>
+      )}
 
       <nav className="tabs">
         <button className={tab==='study'?'active':''} onClick={()=>setTab('study')}><Brain size={18}/> Estudar</button>
