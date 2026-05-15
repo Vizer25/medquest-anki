@@ -81,6 +81,7 @@ const DEFAULT_STATS = {
   fastestSeconds: null,
   slowestSeconds: 0,
   masteryByCard: {},
+  dailySeen: {},
   byGrade: { again: 0, hard: 0, good: 0, easy: 0 }
 }
 
@@ -109,7 +110,13 @@ function formatTime(totalSeconds) {
 }
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10)
+  return dateKey(new Date())
+}
+
+function dateKey(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
 }
 
 function normalize(text) {
@@ -190,6 +197,7 @@ function safeStats(raw) {
     daily: s.daily && typeof s.daily === 'object' ? s.daily : {},
     history: Array.isArray(s.history) ? s.history : [],
     masteryByCard: s.masteryByCard && typeof s.masteryByCard === 'object' ? s.masteryByCard : {},
+    dailySeen: s.dailySeen && typeof s.dailySeen === 'object' ? s.dailySeen : {},
     byGrade: { ...DEFAULT_STATS.byGrade, ...(s.byGrade || {}) }
   }
 }
@@ -618,6 +626,8 @@ export default function App() {
   const [splitCardId, setSplitCardId] = useState(null)
   const [splitParts, setSplitParts] = useState([])
   const [splitSuspendOriginal, setSplitSuspendOriginal] = useState(true)
+  const [timeChallenge, setTimeChallenge] = useState(false)
+  const [challengeLeft, setChallengeLeft] = useState(30)
   const answerRef = useRef(null)
 
   async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats) {
@@ -754,7 +764,7 @@ export default function App() {
   const recentTrend = previousAverage == null ? null : recentAverage - previousAverage
   const performanceDays = Array.from({ length: 30 }, (_, index) => {
     const date = new Date(Date.now() - (29 - index) * DAY)
-    const key = date.toISOString().slice(0, 10)
+    const key = dateKey(date)
     const dayHistory = (stats.history || []).filter(item => String(item.date || '').slice(0, 10) === key)
     const avgPercent = dayHistory.length
       ? Math.round(dayHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / dayHistory.length)
@@ -881,7 +891,21 @@ export default function App() {
 
   useEffect(() => {
     setCardSeconds(0)
+    setChallengeLeft(30)
   }, [index, current?.id])
+
+  useEffect(() => {
+    if (!timeChallenge || !current || currentAlreadyAnswered || editing) return
+    const t = setInterval(() => {
+      setChallengeLeft(prev => Math.max(0, prev - 1))
+    }, 1000)
+    return () => clearInterval(t)
+  }, [timeChallenge, current?.id, currentAlreadyAnswered, editing])
+
+  useEffect(() => {
+    if (!timeChallenge || !current || currentAlreadyAnswered || editing) return
+    if (challengeLeft <= 0) evaluate({ timedOut: true })
+  }, [timeChallenge, challengeLeft, current?.id, currentAlreadyAnswered, editing])
 
   function enter() {
     if (login.trim().toLowerCase() === 'leo' && senha === '1234') {
@@ -986,10 +1010,14 @@ export default function App() {
     setCardSeconds(0)
   }
 
-  function markDailyDone(oldStats) {
+  function markDailyDone(oldStats, cardId) {
     const t = todayKey()
-    const yesterday = new Date(Date.now() - DAY).toISOString().slice(0, 10)
-    const daily = { ...(oldStats.daily || {}), [t]: (oldStats.daily?.[t] || 0) + 1 }
+    const existingSeen = Array.isArray(oldStats.dailySeen?.[t]) ? oldStats.dailySeen[t] : []
+    const alreadySeen = existingSeen.includes(cardId)
+    const nextSeen = alreadySeen ? existingSeen : [...existingSeen, cardId]
+    const yesterday = dateKey(new Date(Date.now() - DAY))
+    const dailySeen = { ...(oldStats.dailySeen || {}), [t]: nextSeen }
+    const daily = { ...(oldStats.daily || {}), [t]: nextSeen.length }
     let studyStreak = oldStats.studyStreak || 0
     let lastStudyDate = oldStats.lastStudyDate || ''
 
@@ -998,7 +1026,7 @@ export default function App() {
       lastStudyDate = t
     }
 
-    return { daily, studyStreak, lastStudyDate }
+    return { daily, dailySeen, studyStreak, lastStudyDate }
   }
 
   function scheduleCard(card, grade) {
@@ -1036,9 +1064,10 @@ export default function App() {
     }
   }
 
-  function evaluate() {
+  function evaluate(options = {}) {
     if (!current) return
     if (currentAlreadyAnswered) return
+    const timedOut = !!options?.timedOut
 
     const cardForAnswer = getCardView(current)
     const userText = answer
@@ -1057,7 +1086,7 @@ export default function App() {
 
     setStats(prevRaw => {
       const prev = safeStats(prevRaw)
-      const dailyPatch = markDailyDone(prev)
+      const dailyPatch = markDailyDone(prev, current.id)
       const newXp = Math.max(0, (prev.xp || 0) + xpDelta)
       const newStreak = isCorrect ? (prev.streak || 0) + 1 : 0
       const historyItem = {
@@ -1117,7 +1146,7 @@ export default function App() {
       type: percent >= 80 ? 'good' : percent >= 60 ? 'medium' : 'bad',
       grade,
       percent,
-      text: `Você acertou ${percent}% da resposta em ${formatTime(cardSeconds)}.`,
+      text: timedOut ? `Tempo esgotado. Você acertou ${percent}% da resposta.` : `Você acertou ${percent}% da resposta em ${formatTime(cardSeconds)}.`,
       userAnswer: userText,
       expected: cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length ? cardForAnswer.clozeAnswers.join(' / ') : (cardForAnswer.resposta || stripHtml(cardForAnswer.htmlBack)),
       scheduleLabel
@@ -1214,6 +1243,12 @@ export default function App() {
   }
 
   function handleAnswerKeyDown(event) {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'm') {
+      event.preventDefault()
+      markCurrentAsCorrect()
+      return
+    }
+
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault()
       if (currentAlreadyAnswered) {
@@ -1706,12 +1741,13 @@ export default function App() {
               <div className="card-top">
                 <span>Card vencido {Math.min(index + 1, dueCards.length)} de {dueCards.length}</span>
                 <span className="timer-chip">Tempo: {formatTime(cardSeconds)}</span>
+                {timeChallenge && !currentAlreadyAnswered && <span className={`challenge-timer ${challengeLeft <= 10 ? 'urgent' : ''}`}>{challengeLeft}s</span>}
+                <label><input type="checkbox" checked={timeChallenge} onChange={e=>setTimeChallenge(e.target.checked)}/> Desafio 30s</label>
                 <label><input type="checkbox" checked={random} onChange={e=>setRandom(e.target.checked)}/> Aleatório</label>
               </div>
+              <div className="question-html" dangerouslySetInnerHTML={{__html: currentView.htmlFront || currentView.pergunta}} />
               <div className="study-workspace">
                 <div className="study-main">
-                  <div className="question-html" dangerouslySetInnerHTML={{__html: currentView.htmlFront || currentView.pergunta}} />
-
                   {editing && (
                     <div className="edit-box">
                       <h3>Editar card</h3>
@@ -1732,38 +1768,26 @@ export default function App() {
                         <button className="secondary" onClick={() => insertAnswerSymbol('≥')} type="button" title="Alt + .">≥</button>
                         <button className="secondary" onClick={() => insertAnswerSymbol('≤')} type="button" title="Alt + ,">≤</button>
                       </div>
-                      <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={handleAnswerKeyDown} placeholder="Digite sua resposta aqui..." />
+                      <textarea ref={answerRef} value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={handleAnswerKeyDown} readOnly={currentAlreadyAnswered} placeholder="Digite sua resposta aqui..." />
                     </div>
                   )}
                   <div className="actions">
-                    <button onClick={evaluate} disabled={currentAlreadyAnswered || editing}><CheckCircle2 size={18}/> Responder</button>
-                    <button className="secondary" onClick={nextCard}>Próximo</button>
-                    <button className="secondary" onClick={goToLastAnswered} disabled={!lastAnsweredId}>Voltar último</button>
-                    <button className="secondary" onClick={startEdit}>Editar card</button>
+                    <button onClick={evaluate} disabled={currentAlreadyAnswered || editing} title="Ctrl + Enter"><CheckCircle2 size={18}/> Responder</button>
+                    <button className="secondary" onClick={nextCard} title="Ctrl + Enter depois de responder">Próximo</button>
+                    <button className="secondary" onClick={goToLastAnswered} disabled={!lastAnsweredId} title="Voltar ao último card respondido">Voltar último</button>
+                    <button className="secondary" onClick={startEdit} title="Editar este card">Editar card</button>
+                    {feedback && feedback.cardId === current.id && feedback.percent < 80 && (
+                      <button className="secondary" onClick={markCurrentAsCorrect} title="Ctrl + M"><CheckCircle2 size={18}/> Marcar acerto</button>
+                    )}
                   </div>
                 </div>
-                <aside className="answer-panel">
+                <aside className={`answer-panel ${feedback && feedback.cardId === current.id ? `result ${feedback.type}` : ''}`}>
                   {feedback && feedback.cardId === current.id ? (
-                    <div className={`feedback ${feedback.type}`}>
-                      <div className="score-line">{feedback.text}</div>
-                      <div className="feedback-actions">
-                        <div className="pill">Agendamento: {feedback.scheduleLabel}</div>
-                        {feedback.percent < 80 && <button className="secondary" onClick={markCurrentAsCorrect} title="Ctrl + Shift + A"><CheckCircle2 size={18}/> Marcar como acerto</button>}
-                      </div>
-                      <div className="answer-box user-answer-box">
-                        <b>Sua resposta:</b>
-                        <p>{feedback.userAnswer || 'Sem resposta digitada.'}</p>
-                      </div>
-                      <div className="answer-box">
-                        <b>Resposta esperada:</b>
-                        <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
-                      </div>
+                    <div className="answer-box">
+                      <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
                     </div>
                   ) : (
-                    <div className="answer-placeholder">
-                      <b>Gabarito</b>
-                      <span>Responda com Ctrl + Enter para mostrar a correção aqui.</span>
-                    </div>
+                    <div className="answer-placeholder" />
                   )}
                 </aside>
               </div>
