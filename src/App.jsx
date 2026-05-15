@@ -31,6 +31,13 @@ function clearStoredAuthSession() {
   }
 }
 
+function scoreTone(percent) {
+  const value = Number(percent || 0)
+  if (value >= 80) return 'score-good'
+  if (value >= 60) return 'score-mid'
+  return 'score-bad'
+}
+
 const DEFAULT_CONFIG = {
   againMinutes: 10,
   hardMinutes: 30,
@@ -1721,7 +1728,7 @@ export default function App() {
           <div className="history-list">
             {(stats.history || []).slice(-20).reverse().map((h, i) => (
               <div className="history-item" key={i}>
-                <b>{h.percent}%</b>
+                <b className={scoreTone(h.percent)}>{h.percent}%</b>
                 <span>{h.pergunta}</span>
                 <small>{formatTime(h.seconds)} | {h.grade} | {new Date(h.date).toLocaleString('pt-BR')}</small>
               </div>

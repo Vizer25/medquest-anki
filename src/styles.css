@@ -125,7 +125,10 @@ textarea{min-height:160px;resize:vertical}
 .day-bar{height:18px;background:#f2f4f7;border-radius:999px;overflow:hidden}
 .day-bar i{display:block;height:100%;background:#00c853;border-radius:999px}
 .history-item{display:grid;grid-template-columns:70px 1fr;gap:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px}
-.history-item b{color:#00a344;font-size:22px}
+.history-item b{font-size:22px}
+.score-good{color:#00a344!important}
+.score-mid{color:#b54708!important}
+.score-bad{color:#b42318!important}
 .history-item span{font-weight:800}
 .history-item small{grid-column:2;color:#667085}
 .empty{text-align:center;padding:40px}
