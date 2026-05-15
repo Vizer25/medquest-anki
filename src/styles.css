@@ -66,6 +66,9 @@ textarea{min-height:160px;resize:vertical}
 .library-actions button{padding:10px 12px;font-size:14px}
 .danger-button{background:#fef3f2;color:#b42318;border:1px solid #fecdca}
 .status-chip{display:inline-flex;margin-bottom:10px;background:#fffaeb;color:#b54708;border:1px solid #fedf89;border-radius:999px;padding:6px 10px;font-weight:900;font-size:13px}
+.split-box{margin-top:14px;background:white;border:1px solid #d0d5dd;border-radius:12px;padding:16px}
+.split-part{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:10px;align-items:start}
+.split-part textarea{min-height:90px;font-size:15px}
 .settings-grid,.advanced-grid,.grade-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
 .settings-grid{grid-template-columns:repeat(2,1fr)}
 .settings-grid label{font-weight:800}
@@ -141,6 +144,7 @@ textarea{min-height:160px;resize:vertical}
   .question-html{font-size:24px}
   .history-item{grid-template-columns:1fr}
   .history-item small{grid-column:1}
+  .split-part{grid-template-columns:1fr}
 }
 
 button:disabled{opacity:.55;cursor:not-allowed}

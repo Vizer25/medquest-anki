@@ -6,7 +6,7 @@ import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import {
   Trophy, XCircle, Flame, Target, Star, LogOut, Lock, RotateCcw, Upload,
   CheckCircle2, Eye, CalendarDays, ListChecks, Clock, Settings, ImageIcon,
-  Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle
+  Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle, Scissors
 } from 'lucide-react'
 const supabase = createClient(
   'https://lgmfmdpzmqunouysuwjp.supabase.co',
@@ -36,6 +36,26 @@ function scoreTone(percent) {
   if (value >= 80) return 'score-good'
   if (value >= 60) return 'score-mid'
   return 'score-bad'
+}
+
+function suggestSplitParts(html) {
+  const source = String(html || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(div|p|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+  const text = stripHtml(source)
+  const lineParts = source
+    .split(/\n+/)
+    .map(part => stripHtml(part).replace(/^[-•]\s*/, '').trim())
+    .filter(part => part.length >= 8)
+
+  if (lineParts.length >= 2) return lineParts.slice(0, 12)
+
+  return text
+    .split(/(?<=[.!?;:])\s+/)
+    .map(part => part.trim())
+    .filter(part => part.length >= 12)
+    .slice(0, 12)
 }
 
 const DEFAULT_CONFIG = {
@@ -590,6 +610,9 @@ export default function App() {
   const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
+  const [splitCardId, setSplitCardId] = useState(null)
+  const [splitParts, setSplitParts] = useState([])
+  const [splitSuspendOriginal, setSplitSuspendOriginal] = useState(true)
 
   async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats) {
     if (!authedUser) return
@@ -1272,6 +1295,71 @@ export default function App() {
     setImportLog('Card excluido da biblioteca.')
   }
 
+  function startSplitCard(cardId) {
+    const card = activeCards.find(c => c.id === cardId)
+    if (!card) return
+    const v = getCardView(card)
+    const parts = suggestSplitParts(v.htmlBack || v.resposta)
+    setSplitCardId(cardId)
+    setSplitParts(parts.length ? parts : [v.resposta || ''])
+    setSplitSuspendOriginal(true)
+  }
+
+  function updateSplitPart(index, value) {
+    setSplitParts(prev => prev.map((part, i) => i === index ? value : part))
+  }
+
+  function removeSplitPart(index) {
+    setSplitParts(prev => prev.filter((_, i) => i !== index))
+  }
+
+  function createSplitCards() {
+    const sourceCard = activeCards.find(c => c.id === splitCardId)
+    if (!sourceCard) return
+    const v = getCardView(sourceCard)
+    const cleanParts = splitParts.map(part => part.trim()).filter(Boolean)
+    if (!cleanParts.length) {
+      setImportLog('A quebra precisa ter pelo menos uma parte preenchida.')
+      return
+    }
+
+    const now = Date.now()
+    const created = cleanParts.map((part, idx) => {
+      const front = `${v.htmlFront || v.pergunta}<br><strong>Parte ${idx + 1} de ${cleanParts.length}</strong>`
+      const back = part.replace(/\r?\n/g, '<br>')
+      return {
+        ...sourceCard,
+        id: `split-${sourceCard.id}-${now}-${idx}`,
+        pergunta: stripHtml(front),
+        resposta: stripHtml(back),
+        htmlFront: front,
+        htmlBack: back,
+        dueAt: Date.now(),
+        reps: 0,
+        correctCount: 0,
+        manualEditedAt: new Date().toISOString(),
+        parentCardId: sourceCard.id,
+        splitFromCard: true,
+        suspended: false,
+        deleted: false,
+        palavras: normalize(back).split(' ').filter(w => w.length > 3).slice(0, 12)
+      }
+    })
+
+    setCards(prev => [
+      ...prev.map(card => card.id === sourceCard.id && splitSuspendOriginal ? {
+        ...card,
+        suspended: true,
+        suspendedAt: new Date().toISOString(),
+        manualEditedAt: new Date().toISOString()
+      } : card),
+      ...created
+    ])
+    setSplitCardId(null)
+    setSplitParts([])
+    setImportLog(`${created.length} cards menores criados${splitSuspendOriginal ? ' e card original suspenso' : ''}.`)
+  }
+
   function clearStudyFilter() {
     setFocusedCardIds([])
     setStudyTag('')
@@ -1591,11 +1679,32 @@ export default function App() {
                   <div className="library-actions">
                     <button className="secondary" onClick={() => studySingleCard(c.id)}><Eye size={16}/> Revisar</button>
                     <button className="secondary" onClick={() => editCardFromLibrary(c.id)}><Pencil size={16}/> Editar</button>
+                    <button className="secondary" onClick={() => startSplitCard(c.id)}><Scissors size={16}/> Quebrar</button>
                     <button className="secondary" onClick={() => toggleSuspendCard(c.id)}>
                       {c.suspended ? <PlayCircle size={16}/> : <PauseCircle size={16}/>} {c.suspended ? 'Reativar' : 'Suspender'}
                     </button>
                     <button className="danger-button" onClick={() => deleteCardFromLibrary(c.id)}><Trash2 size={16}/> Excluir</button>
                   </div>
+                  {splitCardId === c.id && (
+                    <div className="split-box">
+                      <b>Quebrar em cards menores</b>
+                      <p className="hint">Revise as partes sugeridas antes de criar. Cada campo vira um novo flashcard com a mesma pergunta.</p>
+                      {splitParts.map((part, partIndex) => (
+                        <div className="split-part" key={partIndex}>
+                          <textarea value={part} onChange={e => updateSplitPart(partIndex, e.target.value)} />
+                          <button className="secondary" onClick={() => removeSplitPart(partIndex)}>Remover</button>
+                        </div>
+                      ))}
+                      <div className="actions">
+                        <button className="secondary" onClick={() => setSplitParts(prev => [...prev, ''])}><Plus size={16}/> Adicionar parte</button>
+                        <label><input type="checkbox" checked={splitSuspendOriginal} onChange={e => setSplitSuspendOriginal(e.target.checked)}/> Suspender card original</label>
+                      </div>
+                      <div className="actions">
+                        <button onClick={createSplitCards}><Scissors size={16}/> Criar cards menores</button>
+                        <button className="secondary" onClick={() => setSplitCardId(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
                   <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.reps || 0} | Acertos: {v.correctCount || 0} | Proxima revisao: {new Date(v.dueAt || Date.now()).toLocaleString('pt-BR')}</small>
                 </div>
               )
