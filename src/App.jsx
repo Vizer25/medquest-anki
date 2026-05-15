@@ -212,7 +212,9 @@ const MEDICAL_ALIASES = [
   ['pa', ['pressao arterial']],
   ['drc', ['doenca renal cronica']],
   ['tep', ['tromboembolismo pulmonar']],
-  ['avc', ['acidente vascular cerebral']]
+  ['avc', ['acidente vascular cerebral']],
+  ['leucocitos', ['leuco', 'leucocito', 'leucocitos']],
+  ['creatinina', ['cr']]
 ]
 
 function canonicalizeMedicalText(text) {
@@ -299,6 +301,7 @@ function semanticScore(expectedText, userText) {
     ? expectedNumbers.filter(number => numberMatches(number, userNumbers)).length / expectedNumbers.length
     : conceptScore
   let score = ((conceptScore * 0.55) + (userCoverage * 0.25) + (numberScore * 0.20)) * 100
+  if (conceptScore >= 0.72 && userCoverage >= 0.72 && numberScore >= 0.75) score = Math.max(score, 82)
   if (userTokens.length >= 3 && userCoverage >= 0.8 && numberScore >= 0.75) score = Math.max(score, 85)
   if (userTokens.length >= 2 && userCoverage >= 0.9 && !expectedNumbers.length) score = Math.max(score, 82)
   return Math.round(Math.min(100, score))
