@@ -1213,6 +1213,16 @@ export default function App() {
   }
 
   function handleAnswerKeyDown(event) {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault()
+      if (currentAlreadyAnswered) {
+        nextCard()
+      } else if (!editing) {
+        evaluate()
+      }
+      return
+    }
+
     if (!event.altKey) return
     if (event.key === '.' || event.key === '>') {
       event.preventDefault()

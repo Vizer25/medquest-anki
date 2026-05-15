@@ -65,7 +65,7 @@ textarea{min-height:150px;resize:vertical}
 .feedback-actions button{padding:8px 12px;font-size:14px}
 .answer-box{background:white;border-radius:10px;padding:14px;margin-top:10px;color:#111827;border:1px solid #e5e7eb}
 .answer-entry{display:grid;gap:6px}
-.answer-entry textarea{min-height:118px;font-size:17px;line-height:1.45;padding:14px 16px;margin:4px 0 8px}
+.answer-entry textarea{height:88px;min-height:88px;max-height:130px;font-size:17px;line-height:1.45;padding:12px 14px;margin:4px 0 8px}
 .answer-tools{display:flex;gap:6px;justify-content:flex-end}
 .answer-tools button{width:30px;height:28px;padding:0;justify-content:center;font-size:17px;border-radius:7px;background:#f2f4f7;color:#101828;border:1px solid #e5e7eb}
 .pill,.timer-chip{display:inline-block;background:white;border:1px solid #e5e7eb;padding:7px 11px;border-radius:999px;color:#101828;font-weight:900}
