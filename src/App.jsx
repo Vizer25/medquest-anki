@@ -119,6 +119,32 @@ function dateKey(date) {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
+function historyItemDayKey(item) {
+  if (item?.day) return item.day
+  if (!item?.date) return ''
+  const parsed = new Date(item.date)
+  if (!Number.isNaN(parsed.getTime())) return dateKey(parsed)
+  return String(item.date || '').slice(0, 10)
+}
+
+function uniqueHistoryIdsForDay(stats, dayKey) {
+  return Array.from(new Set(
+    (stats.history || [])
+      .filter(item => historyItemDayKey(item) === dayKey && item.id)
+      .map(item => item.id)
+  ))
+}
+
+function dailyUniqueCount(stats, dayKey) {
+  const seen = Array.isArray(stats.dailySeen?.[dayKey]) ? stats.dailySeen[dayKey] : []
+  if (seen.length) return new Set(seen.filter(Boolean)).size
+
+  const historyIds = uniqueHistoryIdsForDay(stats, dayKey)
+  if (historyIds.length) return historyIds.length
+
+  return Number(stats.daily?.[dayKey] || 0)
+}
+
 function normalize(text) {
   return String(text || '')
     .toLowerCase()
@@ -748,7 +774,7 @@ export default function App() {
   }, [activeCards, focusedCards, studyTag])
   const current = dueCards.length ? dueCards[index % dueCards.length] : null
   const currentView = current ? getCardView(current) : null
-  const todayDone = stats.daily?.[todayKey()] || 0
+  const todayDone = dailyUniqueCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
@@ -768,14 +794,14 @@ export default function App() {
   const performanceDays = Array.from({ length: 30 }, (_, index) => {
     const date = new Date(Date.now() - (29 - index) * DAY)
     const key = dateKey(date)
-    const dayHistory = (stats.history || []).filter(item => String(item.date || '').slice(0, 10) === key)
+    const dayHistory = (stats.history || []).filter(item => historyItemDayKey(item) === key)
     const avgPercent = dayHistory.length
       ? Math.round(dayHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / dayHistory.length)
       : 0
     return {
       key,
       label: key.slice(5).replace('-', '/'),
-      count: Number(stats.daily?.[key] || 0),
+      count: dailyUniqueCount(stats, key),
       avgPercent
     }
   })
@@ -981,8 +1007,8 @@ export default function App() {
   function markDailyDone(oldStats, cardId) {
     const t = todayKey()
     const existingSeen = Array.isArray(oldStats.dailySeen?.[t]) ? oldStats.dailySeen[t] : []
-    const alreadySeen = existingSeen.includes(cardId)
-    const nextSeen = alreadySeen ? existingSeen : [...existingSeen, cardId]
+    const historySeen = uniqueHistoryIdsForDay(oldStats, t)
+    const nextSeen = Array.from(new Set([...existingSeen, ...historySeen, cardId].filter(Boolean)))
     const yesterday = dateKey(new Date(Date.now() - DAY))
     const dailySeen = { ...(oldStats.dailySeen || {}), [t]: nextSeen }
     const daily = { ...(oldStats.daily || {}), [t]: nextSeen.length }
@@ -1064,6 +1090,7 @@ export default function App() {
         grade,
         correct: isCorrect,
         seconds: cardSeconds,
+        day: todayKey(),
         date: new Date().toISOString()
       }
 
