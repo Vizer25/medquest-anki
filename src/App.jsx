@@ -31,13 +31,6 @@ function clearStoredAuthSession() {
   }
 }
 
-function scoreTone(percent) {
-  const value = Number(percent || 0)
-  if (value >= 80) return 'score-good'
-  if (value >= 60) return 'score-mid'
-  return 'score-bad'
-}
-
 function suggestSplitParts(html) {
   const source = String(html || '')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -780,17 +773,20 @@ export default function App() {
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
   const avgTime = totalAnswered ? Math.round(Number(stats.totalAnswerSeconds || 0) / totalAnswered) : 0
   const progress = Math.min(100, Number(stats.xp || 0) % 100)
-  const masteryEntries = activeCards.map(card => Number(stats.masteryByCard?.[card.id]?.bestPercent || 0))
-  const masteryAverage = activeCards.length ? Math.round(masteryEntries.reduce((sum, value) => sum + value, 0) / activeCards.length) : 0
+  const masteryEntries = activeCards.map(card => {
+    const cardMastery = stats.masteryByCard?.[card.id] || {}
+    return Number(cardMastery.lastPercent ?? cardMastery.bestPercent ?? 0)
+  })
   const masteredCount = masteryEntries.filter(value => value >= 80).length
   const partialCount = masteryEntries.filter(value => value >= 60 && value < 80).length
   const weakCount = Math.max(0, activeCards.length - masteredCount - partialCount)
-  const masteryGap = Math.max(0, 80 - masteryAverage)
   const recentHistory = (stats.history || []).slice(-50)
   const previousHistory = (stats.history || []).slice(-100, -50)
-  const recentAverage = recentHistory.length ? Math.round(recentHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / recentHistory.length) : 0
-  const previousAverage = previousHistory.length ? Math.round(previousHistory.reduce((sum, item) => sum + Number(item.percent || 0), 0) / previousHistory.length) : null
-  const recentTrend = previousAverage == null ? null : recentAverage - previousAverage
+  const recentCorrectRate = recentHistory.length ? Math.round((recentHistory.filter(item => item.correct).length / recentHistory.length) * 100) : 0
+  const previousCorrectRate = previousHistory.length ? Math.round((previousHistory.filter(item => item.correct).length / previousHistory.length) * 100) : null
+  const recentTrend = previousCorrectRate == null ? null : recentCorrectRate - previousCorrectRate
+  const masteredPercent = activeCards.length ? Math.round((masteredCount / activeCards.length) * 100) : 0
+  const masteredResponses = Number(stats.byGrade.good || 0) + Number(stats.byGrade.easy || 0)
   const performanceDays = Array.from({ length: 30 }, (_, index) => {
     const date = new Date(Date.now() - (29 - index) * DAY)
     const key = dateKey(date)
@@ -806,6 +802,12 @@ export default function App() {
     }
   })
   const maxPerformanceCount = Math.max(1, ...performanceDays.map(day => day.count))
+  const last7Days = performanceDays.slice(-7)
+  const previous7Days = performanceDays.slice(-14, -7)
+  const last7UniqueCount = last7Days.reduce((sum, day) => sum + day.count, 0)
+  const previous7UniqueCount = previous7Days.reduce((sum, day) => sum + day.count, 0)
+  const weeklyCountTrend = last7UniqueCount - previous7UniqueCount
+  const activeStudyDays = last7Days.filter(day => day.count > 0).length
   const currentAlreadyAnswered = !!current && (
     pendingGrade?.cardId === current.id ||
     feedback?.cardId === current.id
@@ -823,7 +825,7 @@ export default function App() {
         <div className="stat-card"><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
         <div className="stat-card"><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
         <div className="stat-card"><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
-        <div className="stat-card stat-streak"><Flame/><span>Streak</span><b>{stats.studyStreak}</b><small>{stats.streak} acertos seguidos</small></div>
+        <div className="stat-card stat-streak"><Flame/><span>Streak</span><b>{stats.studyStreak}</b><small>dias com meta batida</small></div>
         <div className="stat-card"><ImageIcon/><span>Total no deck</span><b>{activeCards.length}</b></div>
         <div className="stat-card"><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
       </section>
@@ -831,8 +833,7 @@ export default function App() {
         <section className="grade-strip">
           <div className="grade-bad"><b>{stats.byGrade.again}</b><span>0-59%</span><i style={{width: `${Math.min(100, ((stats.byGrade.again || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
           <div className="grade-mid"><b>{stats.byGrade.hard}</b><span>60-79%</span><i style={{width: `${Math.min(100, ((stats.byGrade.hard || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
-          <div className="grade-ok"><b>{stats.byGrade.good}</b><span>80-89%</span><i style={{width: `${Math.min(100, ((stats.byGrade.good || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
-          <div className="grade-ok"><b>{stats.byGrade.easy}</b><span>90-100%</span><i style={{width: `${Math.min(100, ((stats.byGrade.easy || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
+          <div className="grade-ok"><b>{masteredResponses}</b><span>80-100%</span><i style={{width: `${Math.min(100, (masteredResponses / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
         </section>
       )}
       <div className="bar"><div style={{width: `${progress}%`}} /></div>
@@ -1291,7 +1292,7 @@ export default function App() {
       ...prev,
       type: 'good',
       grade: correctedGrade,
-      percent: Math.max(Number(prev.percent || 0), 80),
+      percent: 80,
       text: `Marcado manualmente como acerto. Resultado anterior: ${prev.percent}%.`,
       scheduleLabel: nextCorrectCount === 1 ? '10 minutos' : nextCorrectCount === 2 ? '1 dia' : nextCorrectCount === 3 ? '1 semana' : nextCorrectCount === 4 ? '15 dias' : '1 mês'
     } : prev)
@@ -1303,7 +1304,7 @@ export default function App() {
       if (lastIndex >= 0) {
         history[lastIndex] = {
           ...history[lastIndex],
-          percent: Math.max(Number(history[lastIndex].percent || 0), 80),
+          percent: 80,
           grade: correctedGrade,
           correct: true,
           manuallyCorrected: true
@@ -1311,7 +1312,7 @@ export default function App() {
       }
       const byGrade = { ...prev.byGrade }
       if (byGrade[previousGrade] > 0) byGrade[previousGrade] -= 1
-      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + (wasCorrect ? 0 : 1)
+      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + 1
 
       return {
         ...prev,
@@ -1346,7 +1347,7 @@ export default function App() {
       ...prev,
       type: 'bad',
       grade: correctedGrade,
-      percent: Math.min(Number(prev.percent || 0), 59),
+      percent: 0,
       text: `Marcado manualmente como erro. Resultado anterior: ${prev.percent}%.`,
       scheduleLabel: '10 minutos'
     } : prev)
@@ -1358,7 +1359,7 @@ export default function App() {
       if (lastIndex >= 0) {
         history[lastIndex] = {
           ...history[lastIndex],
-          percent: Math.min(Number(history[lastIndex].percent || 0), 59),
+          percent: 0,
           grade: correctedGrade,
           correct: false,
           manuallyCorrected: true
@@ -1366,7 +1367,7 @@ export default function App() {
       }
       const byGrade = { ...prev.byGrade }
       if (byGrade[previousGrade] > 0) byGrade[previousGrade] -= 1
-      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + (wasCorrect ? 1 : 0)
+      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + 1
 
       return {
         ...prev,
@@ -1378,7 +1379,7 @@ export default function App() {
           ...(prev.masteryByCard || {}),
           [current.id]: {
             ...(prev.masteryByCard?.[current.id] || {}),
-            lastPercent: 59,
+            lastPercent: 0,
             lastGrade: correctedGrade,
             manuallyCorrected: true,
             updatedAt: new Date().toISOString()
@@ -1964,31 +1965,48 @@ export default function App() {
 
       {tab === 'stats' && (
         <section className="card">
-          <h2>Estatísticas avançadas</h2>
+          <h2>Progresso do estudo</h2>
           <div className="mastery-panel">
             <div className="mastery-head">
               <div>
-                <span>Domínio geral do deck</span>
-                <b>{masteryAverage}%</b>
+                <span>Cards ainda frágeis</span>
+                <b>{weakCount}</b>
+                <small>{masteredCount} cards já chegaram em 80% ou mais.</small>
               </div>
-              <strong>Meta: 80%</strong>
+              <strong>{masteredPercent}% fortes</strong>
             </div>
             <div className="mastery-track">
-              <i style={{width: `${Math.min(100, masteryAverage)}%`}} />
-              <em style={{left: '80%'}} />
+              <i style={{width: `${Math.min(100, masteredPercent)}%`}} />
             </div>
             <p className="hint">
-              {masteryGap === 0
-                ? 'Você já está acima da meta de domínio de 80% do conteúdo.'
-                : `Faltam ${masteryGap} pontos percentuais para atingir 80% de domínio geral.`}
-              {recentTrend != null && ` Nas últimas 50 respostas, sua média ficou em ${recentAverage}% (${recentTrend >= 0 ? '+' : ''}${recentTrend} pontos vs. as 50 anteriores).`}
+              Nas últimas 50 respostas, você acertou {recentCorrectRate}% dos cards.
+              {recentTrend != null && ` Isso é ${recentTrend >= 0 ? '+' : ''}${recentTrend} pontos vs. as 50 respostas anteriores.`}
             </p>
             <div className="mastery-breakdown">
-              <div className="mastery-ok"><b>{masteredCount}</b><span>Cards dominados<br/>80-100%</span></div>
-              <div className="mastery-mid"><b>{partialCount}</b><span>Em progresso<br/>60-79%</span></div>
-              <div className="mastery-bad"><b>{weakCount}</b><span>Prioridade<br/>0-59%</span></div>
+              <div className="mastery-bad"><b>{weakCount}</b><span>Prioridade<br/>abaixo de 60%</span></div>
+              <div className="mastery-mid"><b>{partialCount}</b><span>Quase lá<br/>60-79%</span></div>
+              <div className="mastery-ok"><b>{masteredCount}</b><span>Fortes<br/>80-100%</span></div>
             </div>
           </div>
+
+          <div className="progress-cards">
+            <div>
+              <span>Cards únicos nos últimos 7 dias</span>
+              <b>{last7UniqueCount}</b>
+              <small>{weeklyCountTrend >= 0 ? '+' : ''}{weeklyCountTrend} vs. 7 dias anteriores</small>
+            </div>
+            <div>
+              <span>Dias estudados na semana</span>
+              <b>{activeStudyDays}/7</b>
+              <small>dias com pelo menos 1 card</small>
+            </div>
+            <div>
+              <span>Acurácia recente</span>
+              <b>{recentCorrectRate}%</b>
+              <small>{recentHistory.length} respostas recentes</small>
+            </div>
+          </div>
+
           <h3>Gráficos de estudo</h3>
           <div className="chart-grid">
             <div className="chart-box">
@@ -1996,6 +2014,7 @@ export default function App() {
               <div className="bar-chart">
                 {performanceDays.map(day => (
                   <div className="chart-day" key={day.key}>
+                    <b>{day.count || ''}</b>
                     <span style={{height: `${Math.max(3, (day.count / maxPerformanceCount) * 100)}%`}} className={day.count >= STREAK_MIN_CARDS ? 'met' : ''} title={`${day.label}: ${day.count} cards`} />
                     <small>{day.label}</small>
                   </div>
@@ -2021,17 +2040,6 @@ export default function App() {
             <div className="advanced-box"><span>Mais lento</span><b>{formatTime(stats.slowestSeconds)}</b><small>Maior tempo</small></div>
           </div>
 
-          <h3>Últimas respostas</h3>
-          <div className="history-list">
-            {(stats.history || []).slice(-20).reverse().map((h, i) => (
-              <div className="history-item" key={i}>
-                <b className={scoreTone(h.percent)}>{h.percent}%</b>
-                <span>{h.pergunta}</span>
-                <small>{formatTime(h.seconds)} | {h.grade} | {new Date(h.date).toLocaleString('pt-BR')}</small>
-              </div>
-            ))}
-            {!(stats.history || []).length && <p className="hint">Nenhuma resposta registrada ainda.</p>}
-          </div>
         </section>
       )}
 
