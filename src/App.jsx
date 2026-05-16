@@ -1210,13 +1210,22 @@ export default function App() {
   }
 
   function handleAnswerKeyDown(event) {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'm') {
+    const ctrl = event.ctrlKey || event.metaKey
+    const key = event.key.toLowerCase()
+
+    if (ctrl && (key === '~' || key === '`' || key === 'dead' || key === 'm')) {
       event.preventDefault()
       markCurrentAsCorrect()
       return
     }
 
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    if (ctrl && key === 'ç') {
+      event.preventDefault()
+      markCurrentAsWrong()
+      return
+    }
+
+    if (ctrl && event.key === 'Enter') {
       event.preventDefault()
       if (currentAlreadyAnswered) {
         nextCard()
@@ -1226,13 +1235,13 @@ export default function App() {
       return
     }
 
-    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'a') {
+    if (ctrl && event.shiftKey && key === 'a') {
       event.preventDefault()
       markCurrentAsCorrect()
       return
     }
 
-    if (!(event.ctrlKey || event.metaKey)) return
+    if (!ctrl) return
     if (event.key === '.' || event.key === '>') {
       event.preventDefault()
       insertAnswerSymbol('≥')
@@ -1798,9 +1807,9 @@ export default function App() {
                   {feedback && feedback.cardId === current.id ? (
                     <>
                       {feedback.percent >= 80 ? (
-                        <button className="result-dot result-dot-wrong" onClick={markCurrentAsWrong} title="Marcar como erro" aria-label="Marcar como erro" type="button" />
+                        <button className="result-dot result-dot-wrong" onClick={markCurrentAsWrong} title="Marcar como erro (Ctrl + ç)" aria-label="Marcar como erro" type="button" />
                       ) : (
-                        <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + M)" aria-label="Marcar como acerto" type="button" />
+                        <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + ~)" aria-label="Marcar como acerto" type="button" />
                       )}
                       <div className="answer-box">
                         <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
