@@ -436,6 +436,10 @@ function stableCardKey(card) {
   return normalize(`${card.noteId || ''} ${card.pergunta || ''} ${card.resposta || ''}`).slice(0, 240)
 }
 
+function importCardKey(card) {
+  return card.importKey || card.originalImportKey || stableCardKey(card)
+}
+
 function imageTags(html) {
   return String(html || '').match(/<img\b[^>]*>/gi) || []
 }
@@ -461,7 +465,11 @@ function mergeMissingImages(existingHtml, importedHtml) {
 
 function mergeImportedCards(oldCards, importedCards) {
   const oldById = new Map(oldCards.map(c => [String(c.id), c]))
-  const oldByKey = new Map(oldCards.map(c => [stableCardKey(c), c]))
+  const oldByKey = new Map()
+  oldCards.forEach(card => {
+    oldByKey.set(stableCardKey(card), card)
+    if (card.importKey || card.originalImportKey) oldByKey.set(importCardKey(card), card)
+  })
   let added = 0
   let updated = 0
   let preservedEdited = 0
@@ -469,8 +477,9 @@ function mergeImportedCards(oldCards, importedCards) {
   const merged = [...oldCards]
 
   importedCards.forEach(newCard => {
+    const nextCard = { ...newCard, importKey: importCardKey(newCard), originalImportKey: importCardKey(newCard) }
     const idKey = String(newCard.id)
-    const contentKey = stableCardKey(newCard)
+    const contentKey = importCardKey(nextCard)
     const existing = oldById.get(idKey) || oldByKey.get(contentKey)
 
     if (existing) {
@@ -486,6 +495,8 @@ function mergeImportedCards(oldCards, importedCards) {
             interval: newCard.interval,
             ease: newCard.ease,
             ankiDue: newCard.ankiDue,
+            importKey: existing.importKey || contentKey,
+            originalImportKey: existing.originalImportKey || contentKey,
             sourceUpdatedAt: new Date().toISOString()
           }
           updated += 1
@@ -507,12 +518,14 @@ function mergeImportedCards(oldCards, importedCards) {
           interval: newCard.interval,
           ease: newCard.ease,
           ankiDue: newCard.ankiDue,
-          palavras: newCard.palavras
+          palavras: newCard.palavras,
+          importKey: existing.importKey || contentKey,
+          originalImportKey: existing.originalImportKey || contentKey
         }
         updated += 1
       }
     } else {
-      merged.push(newCard)
+      merged.push(nextCard)
       added += 1
     }
   })
@@ -630,6 +643,7 @@ export default function App() {
   const [pendingGrade, setPendingGrade] = useState(null)
   const [lastAnsweredId, setLastAnsweredId] = useState(null)
   const [editing, setEditing] = useState(false)
+  const [libraryEditingId, setLibraryEditingId] = useState(null)
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
   const [tab, setTab] = useState('study')
@@ -761,9 +775,9 @@ export default function App() {
   }, [activeCards, focusedCardIds])
   const dueCards = useMemo(() => {
     const base = focusedCards.length
-      ? focusedCards
+      ? focusedCards.filter(c => !c.suspended)
       : activeCards.filter(c => !c.suspended && (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)))
-    return focusedCards.length ? base : base.filter(c => !c.dueAt || c.dueAt <= Date.now())
+    return base.filter(c => !c.dueAt || c.dueAt <= Date.now())
   }, [activeCards, focusedCards, studyTag])
   const current = dueCards.length ? dueCards[index % dueCards.length] : null
   const currentView = current ? getCardView(current) : null
@@ -1155,24 +1169,38 @@ export default function App() {
       : cards
 
     const focusedIds = new Set(focusedCardIds)
-    const freshDue = updatedCards.filter(c => {
+    let shouldClearFocus = false
+    let freshDue = updatedCards.filter(c => {
       if (c.deleted || c.suspended) return false
       if (focusedIds.size && !focusedIds.has(c.id)) return false
       if (!focusedIds.size && studyTag && !String(c.tags || '').split(/\s+/).includes(studyTag)) return false
       return !c.dueAt || c.dueAt <= Date.now()
     })
 
+    if (!freshDue.length && focusedIds.size) {
+      shouldClearFocus = true
+      freshDue = updatedCards.filter(c => {
+        if (c.deleted || c.suspended) return false
+        if (studyTag && !String(c.tags || '').split(/\s+/).includes(studyTag)) return false
+        return !c.dueAt || c.dueAt <= Date.now()
+      })
+    }
+
     setCards(updatedCards)
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
+    if (shouldClearFocus) setFocusedCardIds([])
 
     if (freshDue.length <= 1) {
       setIndex(0)
       return
     }
 
-    setIndex(Math.floor(Math.random() * freshDue.length))
+    const alternatives = current ? freshDue.filter(card => card.id !== current.id) : freshDue
+    const pool = alternatives.length ? alternatives : freshDue
+    const next = pool[Math.floor(Math.random() * pool.length)]
+    setIndex(Math.max(0, freshDue.findIndex(card => card.id === next.id)))
   }
 
   function resetAll() {
@@ -1401,19 +1429,21 @@ export default function App() {
     setFeedback(null)
     setPendingGrade(null)
     setEditing(false)
+    setLibraryEditingId(null)
   }
 
   function startEdit() {
     if (!current) return
     const v = getCardView(current)
+    setLibraryEditingId(null)
     setEditFront(v.htmlFront || v.pergunta || '')
     setEditBack(v.htmlBack || v.resposta || '')
     setEditing(true)
   }
 
   function saveEdit() {
-    if (!current) return
-    const editingCardId = current.id
+    const editingCardId = libraryEditingId || current?.id
+    if (!editingCardId) return
     const pergunta = stripHtml(editFront)
     const resposta = stripHtml(editBack)
     setCards(prev => prev.map(c => c.id === editingCardId ? {
@@ -1432,9 +1462,11 @@ export default function App() {
       } : prev)
     }
     setEditing(false)
+    setLibraryEditingId(null)
   }
 
   function studySingleCard(cardId) {
+    setCards(prev => prev.map(card => card.id === cardId ? { ...card, dueAt: Date.now() } : card))
     setFocusedCardIds([cardId])
     setStudyTag('')
     setIndex(0)
@@ -1442,6 +1474,7 @@ export default function App() {
     setFeedback(null)
     setPendingGrade(null)
     setEditing(false)
+    setLibraryEditingId(null)
     setTab('study')
   }
 
@@ -1449,16 +1482,10 @@ export default function App() {
     const card = activeCards.find(c => c.id === cardId)
     if (!card) return
     const v = getCardView(card)
-    setFocusedCardIds([cardId])
-    setStudyTag('')
-    setIndex(0)
-    setAnswer('')
-    setFeedback(null)
-    setPendingGrade(null)
+    setLibraryEditingId(cardId)
     setEditFront(v.htmlFront || v.pergunta || '')
     setEditBack(v.htmlBack || v.resposta || '')
     setEditing(true)
-    setTab('study')
   }
 
   function toggleSuspendCard(cardId) {
@@ -1500,13 +1527,20 @@ export default function App() {
     if (!card) return
     const v = getCardView(card)
     const parts = suggestSplitParts(v.htmlBack || v.resposta)
+    const baseFront = stripHtml(v.htmlFront || v.pergunta || 'Pergunta')
     setSplitCardId(cardId)
-    setSplitParts(parts.length ? parts : [v.resposta || ''])
+    setSplitParts((parts.length ? parts : [v.resposta || '']).map((part, index) => ({
+      front: `${baseFront} - parte ${index + 1}`,
+      back: part
+    })))
     setSplitSuspendOriginal(true)
   }
 
-  function updateSplitPart(index, value) {
-    setSplitParts(prev => prev.map((part, i) => i === index ? value : part))
+  function updateSplitPart(index, field, value) {
+    setSplitParts(prev => prev.map((part, i) => {
+      const normalized = typeof part === 'string' ? { front: '', back: part } : part
+      return i === index ? { ...normalized, [field]: value } : normalized
+    }))
   }
 
   function removeSplitPart(index) {
@@ -1516,20 +1550,29 @@ export default function App() {
   function createSplitCards() {
     const sourceCard = activeCards.find(c => c.id === splitCardId)
     if (!sourceCard) return
-    const v = getCardView(sourceCard)
-    const cleanParts = splitParts.map(part => part.trim()).filter(Boolean)
+    const cleanParts = splitParts
+      .map((part, idx) => {
+        const normalized = typeof part === 'string' ? { front: '', back: part } : part
+        return {
+          front: String(normalized.front || '').trim() || `${stripHtml(getCardView(sourceCard).htmlFront || sourceCard.pergunta)} - parte ${idx + 1}`,
+          back: String(normalized.back || '').trim()
+        }
+      })
+      .filter(part => part.front && part.back)
     if (!cleanParts.length) {
-      setImportLog('A quebra precisa ter pelo menos uma parte preenchida.')
+      setImportLog('A quebra precisa ter pelo menos um card com pergunta e resposta preenchidas.')
       return
     }
 
     const now = Date.now()
     const created = cleanParts.map((part, idx) => {
-      const front = `${v.htmlFront || v.pergunta}<br><strong>Parte ${idx + 1} de ${cleanParts.length}</strong>`
-      const back = part.replace(/\r?\n/g, '<br>')
+      const front = part.front.replace(/\r?\n/g, '<br>')
+      const back = part.back.replace(/\r?\n/g, '<br>')
       return {
         ...sourceCard,
         id: `split-${sourceCard.id}-${now}-${idx}`,
+        importKey: `split-${sourceCard.id}-${now}-${idx}`,
+        originalImportKey: `split-${sourceCard.id}-${now}-${idx}`,
         pergunta: stripHtml(front),
         resposta: stripHtml(back),
         htmlFront: front,
@@ -1568,6 +1611,7 @@ export default function App() {
     setFeedback(null)
     setPendingGrade(null)
     setEditing(false)
+    setLibraryEditingId(null)
   }
 
   function tsvCell(value) {
@@ -1807,7 +1851,7 @@ export default function App() {
                       <RichTextEditor value={editBack} onChange={setEditBack} />
                       <div className="actions">
                         <button onClick={saveEdit}>Salvar edição</button>
-                        <button className="secondary" onClick={()=>setEditing(false)}>Cancelar</button>
+                        <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null) }}>Cancelar</button>
                       </div>
                     </div>
                   )}
@@ -1890,6 +1934,19 @@ export default function App() {
                   <b>{i+1}. {v.pergunta}</b>
                   <div dangerouslySetInnerHTML={{__html: v.htmlFront || v.pergunta}} />
                   <p><b>Resposta:</b> {v.resposta}</p>
+                  {libraryEditingId === c.id && editing && (
+                    <div className="edit-box">
+                      <h3>Editar flashcard</h3>
+                      <label>Frente/pergunta</label>
+                      <RichTextEditor value={editFront} onChange={setEditFront} />
+                      <label>Resposta/gabarito</label>
+                      <RichTextEditor value={editBack} onChange={setEditBack} />
+                      <div className="actions">
+                        <button onClick={saveEdit}>Salvar edição</button>
+                        <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null) }}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
                   <div className="library-actions">
                     <button className="secondary" onClick={() => studySingleCard(c.id)}><Eye size={16}/> Revisar</button>
                     <button className="secondary" onClick={() => editCardFromLibrary(c.id)}><Pencil size={16}/> Editar</button>
@@ -1902,15 +1959,22 @@ export default function App() {
                   {splitCardId === c.id && (
                     <div className="split-box">
                       <b>Quebrar em cards menores</b>
-                      <p className="hint">Revise as partes sugeridas antes de criar. Cada campo vira um novo flashcard com a mesma pergunta.</p>
+                      <p className="hint">Revise as partes sugeridas antes de criar. Cada bloco vira um novo flashcard; você pode editar a pergunta e o gabarito de cada um.</p>
                       {splitParts.map((part, partIndex) => (
                         <div className="split-part" key={partIndex}>
-                          <textarea value={part} onChange={e => updateSplitPart(partIndex, e.target.value)} />
+                          <label>
+                            Pergunta
+                            <textarea value={typeof part === 'string' ? '' : part.front} onChange={e => updateSplitPart(partIndex, 'front', e.target.value)} />
+                          </label>
+                          <label>
+                            Resposta
+                            <textarea value={typeof part === 'string' ? part : part.back} onChange={e => updateSplitPart(partIndex, 'back', e.target.value)} />
+                          </label>
                           <button className="secondary" onClick={() => removeSplitPart(partIndex)}>Remover</button>
                         </div>
                       ))}
                       <div className="actions">
-                        <button className="secondary" onClick={() => setSplitParts(prev => [...prev, ''])}><Plus size={16}/> Adicionar parte</button>
+                        <button className="secondary" onClick={() => setSplitParts(prev => [...prev, { front: '', back: '' }])}><Plus size={16}/> Adicionar parte</button>
                         <label><input type="checkbox" checked={splitSuspendOriginal} onChange={e => setSplitSuspendOriginal(e.target.checked)}/> Suspender card original</label>
                       </div>
                       <div className="actions">
