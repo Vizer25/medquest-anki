@@ -352,6 +352,11 @@ const MEDICAL_ALIASES = [
 function canonicalizeMedicalText(text) {
   let out = normalize(
     String(text || '')
+      .replace(/\bé\b/gi, ' eh ')
+      .replace(/≥|>=/g, ' maior igual ')
+      .replace(/≤|<=/g, ' menor igual ')
+      .replace(/>/g, ' maior ')
+      .replace(/</g, ' menor ')
       .replace(/\b(\d{1,3})\.(\d{3})\b/g, '$1$2')
       .replace(/\b(\d+),(\d+)\b/g, '$1p$2')
   )
@@ -418,6 +423,115 @@ function numberMatches(expected, userNumbers) {
   })
 }
 
+const RELATION_GROUPS = [
+  {
+    group: 'position',
+    a: ['superior', 'acima', 'alto', 'cranial'],
+    b: ['inferior', 'abaixo', 'baixo', 'caudal']
+  },
+  {
+    group: 'size',
+    a: ['maior', 'alto', 'alta', 'elevado', 'elevada'],
+    b: ['menor', 'baixo', 'baixa', 'reduzido', 'reduzida']
+  },
+  {
+    group: 'change',
+    a: ['aumenta', 'aumento', 'sobe', 'subir', 'eleva', 'elevacao', 'cresce'],
+    b: ['diminui', 'diminuicao', 'reduz', 'reducao', 'cai', 'queda', 'baixa']
+  },
+  {
+    group: 'timing',
+    a: ['antes', 'previo', 'precoce', 'inicial'],
+    b: ['depois', 'apos', 'tardio', 'posterior']
+  },
+  {
+    group: 'polarity',
+    a: ['positivo', 'presente', 'sim'],
+    b: ['negativo', 'ausente', 'nao']
+  }
+]
+
+const RELATION_LOOKUP = RELATION_GROUPS.reduce((map, item) => {
+  item.a.forEach(word => map.set(lightStem(word), { group: item.group, side: 'a' }))
+  item.b.forEach(word => map.set(lightStem(word), { group: item.group, side: 'b' }))
+  return map
+}, new Map())
+
+const CLAIM_BOUNDARIES = new Set(['e', 'ou', 'mas', 'porem', 'entao', 'quando', 'se'])
+const CLAIM_IGNORED_TERMS = new Set([
+  ...STOP_WORDS,
+  'eh','ser','sao','estrutura','estruturas','mais','menos','mesmo','mesma','fica','ficam','ficar','valor','valores'
+])
+
+function relationForToken(token) {
+  return RELATION_LOOKUP.get(lightStem(token))
+}
+
+function cleanClaimTerm(token) {
+  const stem = lightStem(token)
+  if (stem.length <= 2) return ''
+  if (CLAIM_IGNORED_TERMS.has(token) || CLAIM_IGNORED_TERMS.has(stem)) return ''
+  if (relationForToken(token)) return ''
+  return stem
+}
+
+function collectClaimTerms(tokens, start, step) {
+  const terms = []
+  for (let index = start; index >= 0 && index < tokens.length; index += step) {
+    const token = tokens[index]
+    if (CLAIM_BOUNDARIES.has(token) || relationForToken(token)) break
+    const term = cleanClaimTerm(token)
+    if (term) terms.push(term)
+  }
+  return step < 0 ? terms.reverse() : terms
+}
+
+function extractRelationClaims(text) {
+  const tokens = canonicalizeMedicalText(text).split(' ').filter(Boolean)
+  const claims = []
+
+  tokens.forEach((token, index) => {
+    const relation = relationForToken(token)
+    if (!relation) return
+
+    const before = collectClaimTerms(tokens, index - 1, -1)
+    const after = collectClaimTerms(tokens, index + 1, 1)
+    const subject = before.length ? before : after
+    if (!subject.length) return
+
+    claims.push({
+      group: relation.group,
+      side: relation.side,
+      subject: new Set(subject)
+    })
+  })
+
+  return claims
+}
+
+function claimOverlap(a, b) {
+  let count = 0
+  a.subject.forEach(term => {
+    if (b.subject.has(term)) count += 1
+  })
+  return count
+}
+
+function countRelationContradictions(expectedText, userText) {
+  const expectedClaims = extractRelationClaims(expectedText)
+  const userClaims = extractRelationClaims(userText)
+  let contradictions = 0
+
+  expectedClaims.forEach(expected => {
+    userClaims.forEach(user => {
+      if (expected.group !== user.group || expected.side === user.side) return
+      if (claimOverlap(expected, user) > 0) contradictions += 1
+    })
+  })
+
+  return contradictions
+}
+
 function semanticScore(expectedText, userText) {
   const expectedTokens = [...new Set(answerTokens(expectedText))]
   const userTokens = [...new Set(answerTokens(userText))]
@@ -436,6 +550,8 @@ function semanticScore(expectedText, userText) {
   if (conceptScore >= 0.72 && userCoverage >= 0.72 && numberScore >= 0.75) score = Math.max(score, 82)
   if (userTokens.length >= 3 && userCoverage >= 0.8 && numberScore >= 0.75) score = Math.max(score, 85)
   if (userTokens.length >= 2 && userCoverage >= 0.9 && !expectedNumbers.length) score = Math.max(score, 82)
+  const contradictions = countRelationContradictions(expectedText, userText)
+  if (contradictions) score = Math.min(score, contradictions >= 2 ? 35 : 55)
   return Math.round(Math.min(100, score))
 }
 
