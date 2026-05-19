@@ -147,6 +147,14 @@ function hasScheduledDue(card) {
   return typeof raw === 'string' && Number.isFinite(Date.parse(raw))
 }
 
+function hasReviewHistory(card) {
+  return Number(card?.reps || 0) > 0 ||
+    Number(card?.correctCount || 0) > 0 ||
+    Number(card?.reviewLevel || 0) > 0 ||
+    Number(card?.stageProgress || 0) > 0 ||
+    Boolean(card?.lastGrade)
+}
+
 function isCardDue(card, now = Date.now()) {
   return !card?.dueAt || dueTimestamp(card, now) <= now
 }
@@ -157,6 +165,10 @@ function sortDueQueue(cards, now = Date.now()) {
     const aScheduled = hasScheduledDue(a)
     const bScheduled = hasScheduledDue(b)
     if (aScheduled !== bScheduled) return aScheduled ? -1 : 1
+
+    const aReviewed = hasReviewHistory(a)
+    const bReviewed = hasReviewHistory(b)
+    if (aReviewed !== bReviewed) return aReviewed ? -1 : 1
 
     const aTime = dueTimestamp(a, now)
     const bTime = dueTimestamp(b, now)
@@ -532,13 +544,95 @@ function countRelationContradictions(expectedText, userText) {
   return contradictions
 }
 
-function semanticScore(expectedText, userText) {
+function extractQuestionLabels(questionText) {
+  const raw = stripHtml(decodeHtmlEntities(questionText))
+  const labels = []
+  const explicitMatches = raw.matchAll(/([A-ZÁÉÍÓÚÂÊÔÃÕÇ][A-Za-zÀ-ÿ0-9-]{2,})\s*(?:\[[^\]]*\]|\.\.\.)/g)
+
+  for (const match of explicitMatches) {
+    const label = canonicalizeMedicalText(match[1])
+    if (label && !STOP_WORDS.has(label)) labels.push(label)
+  }
+
+  return [...new Set(labels)]
+}
+
+function splitExpectedOrderedParts(expectedText) {
+  const raw = stripHtml(decodeHtmlEntities(expectedText))
+  const marked = raw.replace(/(?:^|\s)(?:\d+|[a-z])\s*[\.\):;-]\s*/gi, '|||')
+  const parts = marked
+    .split('|||')
+    .map(part => part.trim())
+    .filter(Boolean)
+
+  if (parts.length >= 2) return parts
+
+  return raw
+    .split(/[\n\r;]+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+}
+
+function tokenPositions(tokens, target) {
+  const targetStem = lightStem(target)
+  const positions = []
+  tokens.forEach((token, index) => {
+    if (lightStem(token) === targetStem) positions.push(index)
+  })
+  return positions
+}
+
+function orderedLabelScore(questionText, expectedText, userText) {
+  const labels = extractQuestionLabels(questionText)
+  const expectedParts = splitExpectedOrderedParts(expectedText)
+  if (labels.length < 2 || expectedParts.length < 2) return null
+
+  const userTokens = canonicalizeMedicalText(userText).split(' ').filter(Boolean)
+  const userHasLabels = labels.filter(label => tokenPositions(userTokens, label).length > 0).length
+  if (userHasLabels < Math.min(2, labels.length)) return null
+
+  let checked = 0
+  let correct = 0
+  let inverted = 0
+  const expectedTokensByPart = expectedParts.map(part => [...new Set(answerTokens(part))])
+  const allLabelPositions = labels.flatMap(label => tokenPositions(userTokens, label)).sort((a, b) => a - b)
+
+  labels.slice(0, expectedTokensByPart.length).forEach((label, labelIndex) => {
+    const positions = tokenPositions(userTokens, label)
+    if (!positions.length) return
+
+    const windowTokens = new Set()
+    positions.forEach(position => {
+      const nextLabel = allLabelPositions.find(labelPosition => labelPosition > position) ?? userTokens.length
+      userTokens.slice(position + 1, Math.min(nextLabel, position + 7)).forEach(token => windowTokens.add(lightStem(token)))
+    })
+
+    const expectedTokens = expectedTokensByPart[labelIndex]
+    const matchedExpected = expectedTokens.some(token => windowTokens.has(lightStem(token)))
+    const matchedOther = expectedTokensByPart.some((tokens, partIndex) => {
+      if (partIndex === labelIndex) return false
+      return tokens.some(token => windowTokens.has(lightStem(token)))
+    })
+
+    if (matchedExpected || matchedOther) checked += 1
+    if (matchedExpected) correct += 1
+    if (!matchedExpected && matchedOther) inverted += 1
+  })
+
+  if (!checked) return null
+  if (inverted > 0) return Math.max(0, Math.round((correct / checked) * 45))
+  if (correct === checked && checked >= 2) return 92
+  return Math.round((correct / checked) * 70)
+}
+
+function semanticScore(expectedText, userText, questionText = '') {
   const expectedTokens = [...new Set(answerTokens(expectedText))]
   const userTokens = [...new Set(answerTokens(userText))]
   const expectedNumbers = [...new Set(extractNumbers(expectedText))]
   const userNumbers = [...new Set(extractNumbers(userText))]
   if (!expectedTokens.length) return 0
   if (canonicalizeMedicalText(userText).includes(canonicalizeMedicalText(expectedText))) return 100
+  const orderedScore = orderedLabelScore(questionText, expectedText, userText)
   const hits = expectedTokens.filter(token => tokenMatches(token, userTokens)).length
   const conceptScore = hits / expectedTokens.length
   const userRelevantHits = userTokens.filter(token => tokenMatches(token, expectedTokens)).length
@@ -552,6 +646,9 @@ function semanticScore(expectedText, userText) {
   if (userTokens.length >= 2 && userCoverage >= 0.9 && !expectedNumbers.length) score = Math.max(score, 82)
   const contradictions = countRelationContradictions(expectedText, userText)
   if (contradictions) score = Math.min(score, contradictions >= 2 ? 35 : 55)
+  if (orderedScore != null) {
+    score = orderedScore >= 80 ? Math.max(score, orderedScore) : Math.min(score, orderedScore)
+  }
   return Math.round(Math.min(100, score))
 }
 
@@ -1298,10 +1395,10 @@ export default function App() {
     let percent = 0
 
     if (cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length) {
-      const scores = cardForAnswer.clozeAnswers.map(item => semanticScore(item, userText))
+      const scores = cardForAnswer.clozeAnswers.map(item => semanticScore(item, userText, cardForAnswer.pergunta || stripHtml(cardForAnswer.htmlFront)))
       percent = Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
     } else {
-      percent = semanticScore(cardForAnswer.resposta || stripHtml(cardForAnswer.htmlBack), userText)
+      percent = semanticScore(cardForAnswer.resposta || stripHtml(cardForAnswer.htmlBack), userText, cardForAnswer.pergunta || stripHtml(cardForAnswer.htmlFront))
     }
 
     const grade = percent < 60 ? 'again' : percent < 80 ? 'hard' : percent < 90 ? 'good' : 'easy'
