@@ -112,6 +112,33 @@ function dateKey(date) {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
+function hashString(value) {
+  return String(value || '').split('').reduce((hash, char) => {
+    return ((hash << 5) - hash + char.charCodeAt(0)) | 0
+  }, 0)
+}
+
+function dueTimestamp(card, fallback = Date.now()) {
+  const value = Number(card?.dueAt)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function isCardDue(card, now = Date.now()) {
+  return !card?.dueAt || dueTimestamp(card, now) <= now
+}
+
+function sortDueQueue(cards, now = Date.now()) {
+  const tieSeed = todayKey()
+  return [...cards].sort((a, b) => {
+    const aTime = dueTimestamp(a, now)
+    const bTime = dueTimestamp(b, now)
+    const aBucket = Math.floor(aTime / (5 * 60 * 1000))
+    const bBucket = Math.floor(bTime / (5 * 60 * 1000))
+    if (aBucket !== bBucket) return aBucket - bBucket
+    return hashString(`${a.id}-${tieSeed}`) - hashString(`${b.id}-${tieSeed}`)
+  })
+}
+
 function historyItemDayKey(item) {
   if (item?.day) return item.day
   if (!item?.date) return ''
@@ -773,12 +800,28 @@ export default function App() {
     const ids = new Set(focusedCardIds)
     return activeCards.filter(c => ids.has(c.id))
   }, [activeCards, focusedCardIds])
+  const dueRefreshKey = Math.floor(Date.now() / 30000)
   const dueCards = useMemo(() => {
+    const now = Date.now()
     const base = focusedCards.length
       ? focusedCards.filter(c => !c.suspended)
       : activeCards.filter(c => !c.suspended && (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)))
-    return base.filter(c => !c.dueAt || c.dueAt <= Date.now())
-  }, [activeCards, focusedCards, studyTag])
+    const due = sortDueQueue(base.filter(c => isCardDue(c, now)), now)
+
+    if (focusedCards.length && !due.length) {
+      return sortDueQueue(
+        activeCards.filter(c =>
+          !c.deleted &&
+          !c.suspended &&
+          (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)) &&
+          isCardDue(c, now)
+        ),
+        now
+      )
+    }
+
+    return due
+  }, [activeCards, focusedCards, studyTag, dueRefreshKey])
   const current = dueCards.length ? dueCards[index % dueCards.length] : null
   const currentView = current ? getCardView(current) : null
   const todayDone = dailyUniqueCount(stats, todayKey())
@@ -1174,7 +1217,7 @@ export default function App() {
       if (c.deleted || c.suspended) return false
       if (focusedIds.size && !focusedIds.has(c.id)) return false
       if (!focusedIds.size && studyTag && !String(c.tags || '').split(/\s+/).includes(studyTag)) return false
-      return !c.dueAt || c.dueAt <= Date.now()
+      return isCardDue(c)
     })
 
     if (!freshDue.length && focusedIds.size) {
@@ -1182,7 +1225,7 @@ export default function App() {
       freshDue = updatedCards.filter(c => {
         if (c.deleted || c.suspended) return false
         if (studyTag && !String(c.tags || '').split(/\s+/).includes(studyTag)) return false
-        return !c.dueAt || c.dueAt <= Date.now()
+        return isCardDue(c)
       })
     }
 
@@ -1197,10 +1240,11 @@ export default function App() {
       return
     }
 
-    const alternatives = current ? freshDue.filter(card => card.id !== current.id) : freshDue
-    const pool = alternatives.length ? alternatives : freshDue
-    const next = pool[Math.floor(Math.random() * pool.length)]
-    setIndex(Math.max(0, freshDue.findIndex(card => card.id === next.id)))
+    const sortedDue = sortDueQueue(freshDue)
+    const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
+    const pool = alternatives.length ? alternatives : sortedDue
+    const next = pool[0]
+    setIndex(Math.max(0, sortedDue.findIndex(card => card.id === next.id)))
   }
 
   function resetAll() {
