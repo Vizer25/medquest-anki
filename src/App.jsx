@@ -20,6 +20,12 @@ const supabase = createClient(
 )
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
+const REVIEW_STAGES = [
+  { level: 0, label: '10 minutos', delay: 10 * 60 * 1000 },
+  { level: 1, label: '1 dia', delay: DAY },
+  { level: 2, label: '1 semana', delay: 7 * DAY },
+  { level: 3, label: '1 mês', delay: 30 * DAY }
+]
 
 function clearStoredAuthSession() {
   try {
@@ -137,6 +143,54 @@ function sortDueQueue(cards, now = Date.now()) {
     if (aBucket !== bBucket) return aBucket - bBucket
     return hashString(`${a.id}-${tieSeed}`) - hashString(`${b.id}-${tieSeed}`)
   })
+}
+
+function inferReviewState(card) {
+  if (Number.isFinite(Number(card?.reviewLevel)) || Number.isFinite(Number(card?.stageProgress))) {
+    return {
+      level: Math.max(0, Math.min(3, Number(card.reviewLevel || 0))),
+      progress: Math.max(0, Math.min(1, Number(card.stageProgress || 0)))
+    }
+  }
+
+  const legacyCorrects = Math.max(0, Number(card?.correctCount || 0))
+  return {
+    level: Math.max(0, Math.min(3, Math.floor(legacyCorrects / 2))),
+    progress: legacyCorrects >= 6 ? 0 : legacyCorrects % 2
+  }
+}
+
+function previewSchedule(card, grade) {
+  const isWrong = grade === 'again' || grade === 'hard'
+  const currentState = inferReviewState(card)
+  let level = currentState.level
+  let progress = currentState.progress
+
+  if (isWrong) {
+    if (level > 0) {
+      level -= 1
+      progress = 1
+    } else {
+      progress = 0
+    }
+  } else {
+    progress += 1
+    if (progress >= 2 && level < REVIEW_STAGES.length - 1) {
+      level += 1
+      progress = 0
+    } else if (level === REVIEW_STAGES.length - 1) {
+      progress = Math.min(1, progress)
+    }
+  }
+
+  const stage = REVIEW_STAGES[level]
+  return {
+    level,
+    progress,
+    delay: stage.delay,
+    label: stage.label,
+    correctCount: level * 2 + progress
+  }
 }
 
 function historyItemDayKey(item) {
@@ -1082,37 +1136,17 @@ export default function App() {
   }
 
   function scheduleCard(card, grade) {
-    const isWrong = grade === 'again' || grade === 'hard'
-    const previousCorrect = Number(card.correctCount || 0)
-    const correctCount = isWrong ? previousCorrect : previousCorrect + 1
-
-    let delay
-
-    if (isWrong) {
-      // Errou ou ficou abaixo do corte: volta em 10 minutos até acertar.
-      delay = 10 * 60 * 1000
-    } else if (correctCount === 1) {
-      // Primeiro acerto: ainda volta no mesmo dia para consolidar.
-      delay = 10 * 60 * 1000
-    } else if (correctCount === 2) {
-      // Segundo acerto: para de repetir no mesmo dia e volta amanhã.
-      delay = 1 * DAY
-    } else if (correctCount === 3) {
-      delay = 7 * DAY
-    } else if (correctCount === 4) {
-      delay = 15 * DAY
-    } else {
-      // Quinto acerto ou mais: espaçamento máximo de 1 mês.
-      delay = 30 * DAY
-    }
+    const nextSchedule = previewSchedule(card, grade)
 
     return {
       ...card,
-      dueAt: Date.now() + delay,
+      dueAt: Date.now() + nextSchedule.delay,
       reps: (card.reps || 0) + 1,
-      correctCount,
+      correctCount: nextSchedule.correctCount,
+      reviewLevel: nextSchedule.level,
+      stageProgress: nextSchedule.progress,
       lastGrade: grade,
-      lastIntervalMs: delay
+      lastIntervalMs: nextSchedule.delay
     }
   }
 
@@ -1181,18 +1215,8 @@ export default function App() {
     setLastAnsweredId(current.id)
     localStorage.setItem('mq_last_answered', current.id)
     setPendingGrade({ cardId: current.id, grade })
-    const nextCorrectCount = isCorrect ? Number(current.correctCount || 0) + 1 : Number(current.correctCount || 0)
-    const scheduleLabel = !isCorrect
-      ? '10 minutos'
-      : nextCorrectCount === 1
-        ? '10 minutos'
-        : nextCorrectCount === 2
-          ? '1 dia'
-          : nextCorrectCount === 3
-            ? '1 semana'
-            : nextCorrectCount === 4
-              ? '15 dias'
-              : '1 mês'
+    const nextSchedule = previewSchedule(current, grade)
+    const scheduleLabel = nextSchedule.label
 
     setFeedback({
       cardId: current.id,
@@ -1358,15 +1382,15 @@ export default function App() {
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'good'
 
+    const nextSchedule = previewSchedule(current, correctedGrade)
     setPendingGrade({ cardId: current.id, grade: correctedGrade })
-    const nextCorrectCount = Number(current.correctCount || 0) + 1
     setFeedback(prev => prev ? {
       ...prev,
       type: 'good',
       grade: correctedGrade,
       percent: 80,
       text: `Marcado manualmente como acerto. Resultado anterior: ${prev.percent}%.`,
-      scheduleLabel: nextCorrectCount === 1 ? '10 minutos' : nextCorrectCount === 2 ? '1 dia' : nextCorrectCount === 3 ? '1 semana' : nextCorrectCount === 4 ? '15 dias' : '1 mês'
+      scheduleLabel: nextSchedule.label
     } : prev)
 
     setStats(prevRaw => {
@@ -1413,6 +1437,7 @@ export default function App() {
     const previousGrade = feedback.grade || pendingGrade?.grade || 'good'
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'again'
+    const nextSchedule = previewSchedule(current, correctedGrade)
 
     setPendingGrade({ cardId: current.id, grade: correctedGrade })
     setFeedback(prev => prev ? {
@@ -1421,7 +1446,7 @@ export default function App() {
       grade: correctedGrade,
       percent: 0,
       text: `Marcado manualmente como erro. Resultado anterior: ${prev.percent}%.`,
-      scheduleLabel: '10 minutos'
+      scheduleLabel: nextSchedule.label
     } : prev)
 
     setStats(prevRaw => {
@@ -1822,7 +1847,7 @@ export default function App() {
       )}
 
       <nav className="tabs">
-        <button className={tab==='study'?'active':''} onClick={()=>setTab('study')}><Brain size={18}/> Estudar</button>
+        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setTab('study') }}><Brain size={18}/> Estudar</button>
         <button className={tab==='cards'?'active':''} onClick={()=>setTab('cards')}><Eye size={18}/> Ver flashcards</button>
         <button className={tab==='import'?'active':''} onClick={()=>setTab('import')}><Upload size={18}/> Importar</button>
         <button className={tab==='create'?'active':''} onClick={()=>setTab('create')}><Plus size={18}/> Criar card</button>
@@ -2155,13 +2180,8 @@ export default function App() {
         <section className="card">
           <h2>Configurações de espaçamento</h2>
           <p className="hint">
-            Intervalo personalizado em uso:
-            erro: 10 minutos até acertar;
-            1º acerto: 10 minutos;
-            2º acerto: 1 dia;
-            3º acerto: 1 semana;
-            4º acerto: 15 dias;
-            5º acerto ou mais: 1 mês. O intervalo máximo é 1 mês.
+            Regra atual: cada fase precisa de 2 acertos para avançar. Primeiro ciclo: 10 minutos;
+            depois 1 dia; depois 1 semana; depois 1 mês. Ao errar, o card cai uma fase.
           </p>
           <div className="settings-grid">
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
