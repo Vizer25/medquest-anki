@@ -125,8 +125,26 @@ function hashString(value) {
 }
 
 function dueTimestamp(card, fallback = Date.now()) {
-  const value = Number(card?.dueAt)
-  return Number.isFinite(value) && value > 0 ? value : fallback
+  const raw = card?.dueAt
+  if (raw == null || raw === '') return fallback
+
+  const numericValue = Number(raw)
+  if (Number.isFinite(numericValue) && numericValue > 0) return numericValue
+
+  if (typeof raw === 'string') {
+    const parsedValue = Date.parse(raw)
+    if (Number.isFinite(parsedValue) && parsedValue > 0) return parsedValue
+  }
+
+  return fallback
+}
+
+function hasScheduledDue(card) {
+  const raw = card?.dueAt
+  if (raw == null || raw === '') return false
+  const numericValue = Number(raw)
+  if (Number.isFinite(numericValue) && numericValue > 0) return true
+  return typeof raw === 'string' && Number.isFinite(Date.parse(raw))
 }
 
 function isCardDue(card, now = Date.now()) {
@@ -136,6 +154,10 @@ function isCardDue(card, now = Date.now()) {
 function sortDueQueue(cards, now = Date.now()) {
   const tieSeed = todayKey()
   return [...cards].sort((a, b) => {
+    const aScheduled = hasScheduledDue(a)
+    const bScheduled = hasScheduledDue(b)
+    if (aScheduled !== bScheduled) return aScheduled ? -1 : 1
+
     const aTime = dueTimestamp(a, now)
     const bTime = dueTimestamp(b, now)
     const aBucket = Math.floor(aTime / (5 * 60 * 1000))
@@ -1847,7 +1869,7 @@ export default function App() {
       )}
 
       <nav className="tabs">
-        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setTab('study') }}><Brain size={18}/> Estudar</button>
+        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setIndex(0); setTab('study') }}><Brain size={18}/> Estudar</button>
         <button className={tab==='cards'?'active':''} onClick={()=>setTab('cards')}><Eye size={18}/> Ver flashcards</button>
         <button className={tab==='import'?'active':''} onClick={()=>setTab('import')}><Upload size={18}/> Importar</button>
         <button className={tab==='create'?'active':''} onClick={()=>setTab('create')}><Plus size={18}/> Criar card</button>
@@ -2052,7 +2074,7 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                  <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.reps || 0} | Acertos: {v.correctCount || 0} | Proxima revisao: {new Date(v.dueAt || Date.now()).toLocaleString('pt-BR')}</small>
+                  <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.reps || 0} | Acertos: {v.correctCount || 0} | Proxima revisao: {hasScheduledDue(v) ? new Date(dueTimestamp(v)).toLocaleString('pt-BR') : 'inédito'}</small>
                 </div>
               )
             })}
