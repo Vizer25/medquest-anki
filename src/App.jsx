@@ -134,6 +134,14 @@ function dueTimestamp(card, fallback = Date.now()) {
   if (typeof raw === 'string') {
     const parsedValue = Date.parse(raw)
     if (Number.isFinite(parsedValue) && parsedValue > 0) return parsedValue
+
+    const brDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,\s*(\d{1,2}):(\d{2})(?::(\d{2}))?)?/)
+    if (brDate) {
+      const [, day, month, year, hour = '0', minute = '0', second = '0'] = brDate
+      const localDate = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second))
+      const localTime = localDate.getTime()
+      if (Number.isFinite(localTime) && localTime > 0) return localTime
+    }
   }
 
   return fallback
@@ -142,13 +150,11 @@ function dueTimestamp(card, fallback = Date.now()) {
 function hasScheduledDue(card) {
   const raw = card?.dueAt
   if (raw == null || raw === '') return false
-  const numericValue = Number(raw)
-  if (Number.isFinite(numericValue) && numericValue > 0) return true
-  return typeof raw === 'string' && Number.isFinite(Date.parse(raw))
+  return dueTimestamp(card, NaN) > 0
 }
 
 function hasReviewHistory(card) {
-  return Number(card?.reps || 0) > 0 ||
+  return Number(card?.siteReps || 0) > 0 ||
     Number(card?.correctCount || 0) > 0 ||
     Number(card?.reviewLevel || 0) > 0 ||
     Number(card?.stageProgress || 0) > 0 ||
@@ -203,7 +209,7 @@ function previewSchedule(card, grade) {
   if (isWrong) {
     if (level > 0) {
       level -= 1
-      progress = 1
+      progress = 0
     } else {
       progress = 0
     }
@@ -1376,7 +1382,8 @@ export default function App() {
     return {
       ...card,
       dueAt: Date.now() + nextSchedule.delay,
-      reps: (card.reps || 0) + 1,
+      reps: Number(card.reps || 0),
+      siteReps: Number(card.siteReps || 0) + 1,
       correctCount: nextSchedule.correctCount,
       reviewLevel: nextSchedule.level,
       stageProgress: nextSchedule.progress,
@@ -2287,7 +2294,7 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                  <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.reps || 0} | Acertos: {v.correctCount || 0} | Proxima revisao: {hasScheduledDue(v) ? new Date(dueTimestamp(v)).toLocaleString('pt-BR') : 'inédito'}</small>
+                  <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.siteReps || 0} | Acertos: {v.correctCount || 0} | Proxima revisao: {hasScheduledDue(v) ? new Date(dueTimestamp(v)).toLocaleString('pt-BR') : 'inédito'}</small>
                 </div>
               )
             })}
