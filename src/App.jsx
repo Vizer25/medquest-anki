@@ -8,13 +8,44 @@ import {
   CheckCircle2, Eye, ListChecks, Settings, ImageIcon,
   Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle, Scissors
 } from 'lucide-react'
+const REMEMBER_LOGIN_KEY = 'mq_remember_login'
+const authStorage = {
+  getItem(key) {
+    try {
+      const storage = localStorage.getItem(REMEMBER_LOGIN_KEY) === 'true' ? localStorage : sessionStorage
+      return storage.getItem(key)
+    } catch {
+      return null
+    }
+  },
+  setItem(key, value) {
+    try {
+      const remembered = localStorage.getItem(REMEMBER_LOGIN_KEY) === 'true'
+      const storage = remembered ? localStorage : sessionStorage
+      const alternateStorage = remembered ? sessionStorage : localStorage
+      storage.setItem(key, value)
+      alternateStorage.removeItem(key)
+    } catch {
+      // Authentication can still fail normally if storage is unavailable.
+    }
+  },
+  removeItem(key) {
+    try {
+      localStorage.removeItem(key)
+      sessionStorage.removeItem(key)
+    } catch {
+      // No stored session to remove.
+    }
+  }
+}
 const supabase = createClient(
   'https://lgmfmdpzmqunouysuwjp.supabase.co',
   'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7',
   {
     auth: {
-      persistSession: false,
-      autoRefreshToken: false
+      persistSession: true,
+      autoRefreshToken: true,
+      storage: authStorage
     }
   }
 )
@@ -29,9 +60,11 @@ const REVIEW_STAGES = [
 
 function clearStoredAuthSession() {
   try {
-    Object.keys(localStorage)
-      .filter(key => key.startsWith('sb-') && key.includes('auth-token'))
-      .forEach(key => localStorage.removeItem(key))
+    ;[localStorage, sessionStorage].forEach(storage => {
+      Object.keys(storage)
+        .filter(key => key.startsWith('sb-') && key.includes('auth-token'))
+        .forEach(key => storage.removeItem(key))
+    })
   } catch (err) {
     console.warn('Nao foi possivel limpar sessao salva.', err)
   }
@@ -953,6 +986,13 @@ export default function App() {
   const [user, setUser] = useState(null)
   const [login, setLogin] = useState('')
   const [senha, setSenha] = useState('')
+  const [rememberLogin, setRememberLogin] = useState(() => {
+    try {
+      return localStorage.getItem(REMEMBER_LOGIN_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
   const [authLoading, setAuthLoading] = useState(false)
   const [syncStatus, setSyncStatus] = useState('')
   const [importBusy, setImportBusy] = useState(false)
@@ -1027,7 +1067,6 @@ export default function App() {
       let nextConfig = DEFAULT_CONFIG
       let nextStats = DEFAULT_STATS
       let nextLastAnswered = null
-      clearStoredAuthSession()
 
       try {
         const savedCards = localStorage.getItem('mq_cards')
@@ -1321,6 +1360,12 @@ export default function App() {
 
     setAuthLoading(true)
     setFeedback(null)
+    if (rememberLogin) {
+      localStorage.setItem(REMEMBER_LOGIN_KEY, 'true')
+    } else {
+      localStorage.removeItem(REMEMBER_LOGIN_KEY)
+    }
+    clearStoredAuthSession()
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -1349,6 +1394,8 @@ export default function App() {
   async function cloudLogout() {
     await supabase.auth.signOut()
     clearStoredAuthSession()
+    localStorage.removeItem(REMEMBER_LOGIN_KEY)
+    setRememberLogin(false)
     setUser(null)
     setLogged(false)
     setFeedback(null)
@@ -2059,6 +2106,10 @@ export default function App() {
           <img src="/medquest-logo.png" alt="MedQuest" className="login-logo" />
           <input value={login} onChange={e=>setLogin(e.target.value)} placeholder="Email" type="email" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
           <input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha" type="password" onKeyDown={e=> e.key === 'Enter' && cloudEnter()} />
+          <label className="remember-login">
+            <input type="checkbox" checked={rememberLogin} onChange={e => setRememberLogin(e.target.checked)} />
+            <span>Manter conectado neste dispositivo privado</span>
+          </label>
           <button onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
           {feedback?.type === 'bad' && <div className="alert bad">{feedback.text}</div>}
           {feedback?.type === 'good' && <div className="alert good">{feedback.text}</div>}
