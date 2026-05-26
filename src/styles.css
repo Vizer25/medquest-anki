@@ -217,7 +217,7 @@ textarea{min-height:150px;resize:vertical}
   .top,.profile{flex-direction:column;align-items:flex-start}
   .stats,.grid-cards,.settings-grid,.advanced-grid,.grade-grid{grid-template-columns:1fr}
   .study-workspace{grid-template-columns:1fr}
-  .answer-panel{position:static}
+  .answer-panel{position:relative;top:auto}
   .chart-grid,.mastery-breakdown,.progress-cards{grid-template-columns:1fr}
   h1{font-size:36px}
   .question-html{font-size:24px}
