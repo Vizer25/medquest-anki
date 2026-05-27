@@ -948,6 +948,18 @@ function RichTextEditor({ value, onChange }) {
     emitChange()
   }
 
+  function handleEditorKeyDown(event) {
+    if (!(event.ctrlKey || event.metaKey)) return
+    if (event.key === '.' || event.key === '>') {
+      event.preventDefault()
+      insertSymbol('≥')
+    }
+    if (event.key === ',' || event.key === '<') {
+      event.preventDefault()
+      insertSymbol('≤')
+    }
+  }
+
   function clearHighlight() {
     runCommand('hiliteColor', 'transparent')
   }
@@ -974,6 +986,7 @@ function RichTextEditor({ value, onChange }) {
         contentEditable
         suppressContentEditableWarning
         onInput={emitChange}
+        onKeyDown={handleEditorKeyDown}
       />
     </div>
   )
@@ -1017,6 +1030,7 @@ export default function App() {
   const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
+  const [newTags, setNewTags] = useState('')
   const [splitCardId, setSplitCardId] = useState(null)
   const [splitParts, setSplitParts] = useState([])
   const [splitSuspendOriginal, setSplitSuspendOriginal] = useState(true)
@@ -1593,7 +1607,7 @@ export default function App() {
       correctCount: 0,
       interval: 0,
       ease: 2500,
-      tags: 'manual',
+      tags: newTags.trim() || 'manual',
       manualEditedAt: new Date().toISOString(),
       palavras: normalize(built.resposta || newBack).split(' ').filter(w => w.length > 3).slice(0, 12)
     }
@@ -1601,6 +1615,7 @@ export default function App() {
     setCards(prev => [...prev, card])
     setNewFront('')
     setNewBack('')
+    setNewTags('')
     setImportLog('Novo card criado.')
     setTab('study')
     setIndex(0)
@@ -2381,9 +2396,14 @@ export default function App() {
             <textarea value={newFront} onChange={e=>setNewFront(e.target.value)} placeholder="Digite a pergunta..." />
             <label>Resposta/gabarito</label>
             <textarea value={newBack} onChange={e=>setNewBack(e.target.value)} placeholder="Digite a resposta..." />
+            <label>Tags</label>
+            <input list="existing-tags" value={newTags} onChange={e=>setNewTags(e.target.value)} placeholder="Ex.: cardio pediatria revisao" />
+            <datalist id="existing-tags">
+              {allTags.map(tag => <option value={tag} key={tag} />)}
+            </datalist>
             <div className="actions">
               <button onClick={createCard}><Plus size={18}/> Criar card</button>
-              <button className="secondary" onClick={()=>{setNewFront(''); setNewBack('')}}>Limpar</button>
+              <button className="secondary" onClick={()=>{setNewFront(''); setNewBack(''); setNewTags('')}}>Limpar</button>
             </div>
           </div>
         </section>
