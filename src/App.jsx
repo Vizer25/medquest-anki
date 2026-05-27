@@ -664,14 +664,67 @@ function orderedLabelScore(questionText, expectedText, userText) {
   return Math.round((correct / checked) * 70)
 }
 
+function expectedAnswerBlocks(expectedText) {
+  const source = decodeHtmlEntities(String(expectedText || ''))
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(div|p|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')
+
+  return source
+    .split(/\n+/)
+    .map(block => block.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+}
+
+function hasStructuredAnswerList(expectedText) {
+  const source = decodeHtmlEntities(String(expectedText || ''))
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(div|p|li|tr|h[1-6])>/gi, '\n')
+
+  return /(?:^|\n)\s*(?:\d+[\).:-]|[-•▪▫])\s+/m.test(source)
+}
+
+function primaryExpectedAnswer(expectedText) {
+  const blocks = expectedAnswerBlocks(expectedText)
+  const firstBlock = blocks[0] || stripHtml(expectedText)
+  const firstSentence = firstBlock.split(/(?<=[.!?])\s+/)[0] || firstBlock
+  return firstSentence.replace(/^\s*(?:\d+[\).:-]|[-•▪▫])\s+/, '').trim()
+}
+
+function isDirectShortAnswerQuestion(questionText) {
+  const question = canonicalizeMedicalText(questionText)
+  return /\bqual\b|\bquais\b|\bquem\b|\bonde\b|\bquando\b|\bse origina\b|\borigina\b|\bcausa\b/.test(question)
+}
+
+function semanticTargetText(expectedText, questionText) {
+  const primary = primaryExpectedAnswer(expectedText)
+  const primaryTokens = [...new Set(answerTokens(primary))]
+  const fullTokens = [...new Set(answerTokens(expectedText))]
+
+  if (
+    primary &&
+    isDirectShortAnswerQuestion(questionText) &&
+    !hasStructuredAnswerList(expectedText) &&
+    primaryTokens.length >= 2 &&
+    primaryTokens.length <= 6 &&
+    fullTokens.length >= primaryTokens.length + 4
+  ) {
+    return primary
+  }
+
+  return expectedText
+}
+
 function semanticScore(expectedText, userText, questionText = '') {
-  const expectedTokens = [...new Set(answerTokens(expectedText))]
+  const targetText = semanticTargetText(expectedText, questionText)
+  const expectedTokens = [...new Set(answerTokens(targetText))]
   const userTokens = [...new Set(answerTokens(userText))]
-  const expectedNumbers = [...new Set(extractNumbers(expectedText))]
+  const expectedNumbers = [...new Set(extractNumbers(targetText))]
   const userNumbers = [...new Set(extractNumbers(userText))]
   if (!expectedTokens.length) return 0
-  if (canonicalizeMedicalText(userText).includes(canonicalizeMedicalText(expectedText))) return 100
-  const orderedScore = orderedLabelScore(questionText, expectedText, userText)
+  if (canonicalizeMedicalText(userText).includes(canonicalizeMedicalText(targetText))) return 100
+  const orderedScore = orderedLabelScore(questionText, targetText, userText)
   const hits = expectedTokens.filter(token => tokenMatches(token, userTokens)).length
   const conceptScore = hits / expectedTokens.length
   const userRelevantHits = userTokens.filter(token => tokenMatches(token, expectedTokens)).length
@@ -683,7 +736,7 @@ function semanticScore(expectedText, userText, questionText = '') {
   if (conceptScore >= 0.72 && userCoverage >= 0.72 && numberScore >= 0.75) score = Math.max(score, 82)
   if (userTokens.length >= 3 && userCoverage >= 0.8 && numberScore >= 0.75) score = Math.max(score, 85)
   if (userTokens.length >= 2 && userCoverage >= 0.9 && !expectedNumbers.length) score = Math.max(score, 82)
-  const contradictions = countRelationContradictions(expectedText, userText)
+  const contradictions = countRelationContradictions(targetText, userText)
   if (contradictions) score = Math.min(score, contradictions >= 2 ? 35 : 55)
   if (orderedScore != null) {
     score = orderedScore >= 80 ? Math.max(score, orderedScore) : Math.min(score, orderedScore)
