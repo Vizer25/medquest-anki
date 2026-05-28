@@ -96,7 +96,8 @@ const DEFAULT_CONFIG = {
   hardMinutes: 30,
   goodDays: 1,
   easyDays: 4,
-  dailyGoal: 100
+  dailyGoal: 100,
+  newDailyGoal: 40
 }
 
 const DEFAULT_STATS = {
@@ -387,6 +388,23 @@ function dailyNewCardCount(stats, dayKey) {
   count = explicitlyNewToday.size
 
   return count
+}
+
+function historyCardIds(stats) {
+  return new Set((stats.history || []).map(item => item?.id).filter(Boolean))
+}
+
+function isUnseenStudyCard(card, seenIds) {
+  return !hasReviewHistory(card) && !seenIds.has(card.id)
+}
+
+function prioritizeUnseenQueue(cards, seenIds, now = Date.now()) {
+  const sorted = sortDueQueue(cards, now)
+  const unseen = sortDueQueue(cards.filter(card => isUnseenStudyCard(card, seenIds)), now)
+  if (!unseen.length) return sorted
+
+  const unseenIds = new Set(unseen.map(card => card.id))
+  return [...unseen, ...sorted.filter(card => !unseenIds.has(card.id))]
 }
 
 function normalize(text) {
@@ -1305,13 +1323,19 @@ export default function App() {
     const ids = new Set(focusedCardIds)
     return activeCards.filter(c => ids.has(c.id))
   }, [activeCards, focusedCardIds])
+  const todayNewCards = dailyNewCardCount(stats, todayKey())
+  const remainingNewToday = Math.max(0, Number(config.newDailyGoal || 0) - todayNewCards)
+  const seenCardIds = useMemo(() => historyCardIds(stats), [stats.history])
   const dueRefreshKey = Math.floor(Date.now() / 30000)
   const dueCards = useMemo(() => {
     const now = Date.now()
     const base = focusedCards.length
       ? focusedCards.filter(c => !c.suspended)
       : activeCards.filter(c => !c.suspended && (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)))
-    const due = sortDueQueue(base.filter(c => isCardDue(c, now)), now)
+    const dueBase = base.filter(c => isCardDue(c, now))
+    const due = sortDueQueue(dueBase, now)
+
+    if (!focusedCards.length && remainingNewToday > 0) return prioritizeUnseenQueue(dueBase, seenCardIds, now)
 
     if (focusedCards.length && !due.length) {
       return sortDueQueue(
@@ -1326,11 +1350,10 @@ export default function App() {
     }
 
     return due
-  }, [activeCards, focusedCards, studyTag, dueRefreshKey])
+  }, [activeCards, focusedCards, studyTag, dueRefreshKey, remainingNewToday, seenCardIds])
   const current = dueCards.length ? dueCards[index % dueCards.length] : null
   const currentView = current ? getCardView(current) : null
   const todayDone = dailyUniqueCount(stats, todayKey())
-  const todayNewCards = dailyNewCardCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
@@ -1385,7 +1408,7 @@ export default function App() {
     <>
       <section className="stats stats-summary">
         <div className="stat-card stat-today"><ListChecks/><span>Feitos hoje</span><b>{todayDone}</b><small>{remainingToday} para a meta</small></div>
-        <div className="stat-card stat-new-today"><Plus/><span>Inéditos hoje</span><b>{todayNewCards}</b><small>{Math.max(0, todayDone - todayNewCards)} revisões</small></div>
+        <div className="stat-card stat-new-today"><Plus/><span>Inéditos hoje</span><b>{todayNewCards}</b><small>{remainingNewToday > 0 ? `${remainingNewToday} para a meta` : `${Math.max(0, todayDone - todayNewCards)} revisões`}</small></div>
         <div className="stat-card"><Target/><span>Total de cards feitos</span><b>{totalAnswered}</b></div>
         <div className="stat-card"><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
         <div className="stat-card"><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
@@ -1734,7 +1757,9 @@ export default function App() {
       return
     }
 
-    const sortedDue = sortDueQueue(freshDue)
+    const sortedDue = !focusedIds.size && remainingNewToday > 0
+      ? prioritizeUnseenQueue(freshDue, seenCardIds)
+      : sortDueQueue(freshDue)
     const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
     const pool = alternatives.length ? alternatives : sortedDue
     const next = pool[0]
@@ -2682,6 +2707,7 @@ export default function App() {
           </p>
           <div className="settings-grid">
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
+            <label>Meta de inéditos/dia<input type="number" min="0" value={config.newDailyGoal || 0} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
           </div>
         </section>
       )}
