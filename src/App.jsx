@@ -1351,7 +1351,10 @@ export default function App() {
 
     return due
   }, [activeCards, focusedCards, studyTag, dueRefreshKey, remainingNewToday, seenCardIds])
-  const current = dueCards.length ? dueCards[index % dueCards.length] : null
+  const answeredCardId = pendingGrade?.cardId || feedback?.cardId || ''
+  const queuedCurrent = dueCards.length ? dueCards[index % dueCards.length] : null
+  const answeredCurrent = answeredCardId ? activeCards.find(card => card.id === answeredCardId) : null
+  const current = answeredCurrent || queuedCurrent
   const currentView = current ? getCardView(current) : null
   const todayDone = dailyUniqueCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
