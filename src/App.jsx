@@ -53,11 +53,11 @@ const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
 const REVIEW_STAGES = [
   { level: 0, label: '10 minutos', delay: 10 * 60 * 1000 },
-  { level: 1, label: '1 dia', delay: DAY },
+  { level: 1, label: '3 dias', delay: 3 * DAY },
   { level: 2, label: '1 semana', delay: 7 * DAY },
   { level: 3, label: '1 mês', delay: 30 * DAY }
 ]
-const REVIEW_STAGE_NAMES = ['10 minutos', 'Diária', 'Semanal', 'Mensal']
+const REVIEW_STAGE_NAMES = ['10 minutos', '3 dias', 'Semanal', 'Mensal']
 
 function clearStoredAuthSession() {
   try {
@@ -398,25 +398,56 @@ function isUnseenStudyCard(card, seenIds) {
   return !hasReviewHistory(card) && !seenIds.has(card.id)
 }
 
-function isLearningReplayCard(card) {
-  if (!hasReviewHistory(card)) return false
-  const state = inferReviewState(card)
-  return state.level === 0
+function sortReviewQueue(cards, now = Date.now()) {
+  const tieSeed = todayKey()
+  return [...cards].sort((a, b) => {
+    const aState = inferReviewState(a)
+    const bState = inferReviewState(b)
+    if (aState.level !== bState.level) return bState.level - aState.level
+
+    if (aState.level === 0) {
+      const repsDiff = totalSiteReps(b) - totalSiteReps(a)
+      if (repsDiff) return repsDiff
+    }
+
+    const aTime = dueTimestamp(a, now)
+    const bTime = dueTimestamp(b, now)
+    if (aTime !== bTime) return aTime - bTime
+
+    return hashString(`${a.id}-${tieSeed}`) - hashString(`${b.id}-${tieSeed}`)
+  })
 }
 
-function prioritizeUnseenQueue(cards, seenIds, now = Date.now()) {
-  const sorted = sortDueQueue(cards, now)
-  const learningReplay = sortDueQueue(cards.filter(isLearningReplayCard), now)
+function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now()) {
   const unseen = sortDueQueue(cards.filter(card => isUnseenStudyCard(card, seenIds)), now)
-  if (!learningReplay.length && !unseen.length) return sorted
-
-  const learningReplayIds = new Set(learningReplay.map(card => card.id))
   const unseenIds = new Set(unseen.map(card => card.id))
-  return [
-    ...learningReplay,
-    ...unseen.filter(card => !learningReplayIds.has(card.id)),
-    ...sorted.filter(card => !learningReplayIds.has(card.id) && !unseenIds.has(card.id))
-  ]
+  const reviews = sortReviewQueue(cards.filter(card => !unseenIds.has(card.id)), now)
+
+  if (!shouldPullUnseen || !unseen.length) return [...reviews, ...unseen]
+  if (!reviews.length) return unseen
+
+  const queue = []
+  let reviewIndex = 0
+  let unseenIndex = 0
+
+  while (reviewIndex < reviews.length || unseenIndex < unseen.length) {
+    for (let count = 0; count < 2 && reviewIndex < reviews.length; count += 1) {
+      queue.push(reviews[reviewIndex])
+      reviewIndex += 1
+    }
+    if (unseenIndex < unseen.length) {
+      queue.push(unseen[unseenIndex])
+      unseenIndex += 1
+    }
+    if (reviewIndex >= reviews.length) {
+      while (unseenIndex < unseen.length) {
+        queue.push(unseen[unseenIndex])
+        unseenIndex += 1
+      }
+    }
+  }
+
+  return queue
 }
 
 function normalize(text) {
@@ -1345,20 +1376,18 @@ export default function App() {
       ? focusedCards.filter(c => !c.suspended)
       : activeCards.filter(c => !c.suspended && (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)))
     const dueBase = base.filter(c => isCardDue(c, now))
-    const due = sortDueQueue(dueBase, now)
-
-    if (!focusedCards.length && remainingNewToday > 0) return prioritizeUnseenQueue(dueBase, seenCardIds, now)
+    const due = focusedCards.length
+      ? sortDueQueue(dueBase, now)
+      : buildStudyQueue(dueBase, seenCardIds, remainingNewToday > 0, now)
 
     if (focusedCards.length && !due.length) {
-      return sortDueQueue(
-        activeCards.filter(c =>
-          !c.deleted &&
-          !c.suspended &&
-          (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)) &&
-          isCardDue(c, now)
-        ),
-        now
+      const fallbackDue = activeCards.filter(c =>
+        !c.deleted &&
+        !c.suspended &&
+        (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)) &&
+        isCardDue(c, now)
       )
+      return buildStudyQueue(fallbackDue, seenCardIds, remainingNewToday > 0, now)
     }
 
     return due
@@ -1772,9 +1801,9 @@ export default function App() {
       return
     }
 
-    const sortedDue = !focusedIds.size && remainingNewToday > 0
-      ? prioritizeUnseenQueue(freshDue, seenCardIds)
-      : sortDueQueue(freshDue)
+    const sortedDue = focusedIds.size
+      ? sortDueQueue(freshDue)
+      : buildStudyQueue(freshDue, seenCardIds, remainingNewToday > 0)
     const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
     const pool = alternatives.length ? alternatives : sortedDue
     const next = pool[0]
@@ -2718,7 +2747,8 @@ export default function App() {
           <h2>Configurações de espaçamento</h2>
           <p className="hint">
             Regra atual: cada fase precisa de 2 acertos para avançar. Primeiro ciclo: 10 minutos;
-            depois 1 dia; depois 1 semana; depois 1 mês. Ao errar, o card cai uma fase.
+            depois 3 dias; depois 1 semana; depois 1 mês. Ao errar, o card cai uma fase.
+            Enquanto houver meta de inéditos pendente, a fila intercala 2 revisões para 1 inédito.
           </p>
           <div className="settings-grid">
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
