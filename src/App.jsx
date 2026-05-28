@@ -267,8 +267,34 @@ function previewSchedule(card, grade) {
   }
 }
 
-function totalSiteReps(card) {
-  return Math.max(0, Number(card?.siteReps || 0))
+function buildCardReviewMetrics(history = []) {
+  return (history || []).reduce((map, item) => {
+    if (!item?.id) return map
+    const current = map.get(item.id) || { attempts: 0, corrects: 0, wrongs: 0 }
+    current.attempts += 1
+    if (item.correct) current.corrects += 1
+    else current.wrongs += 1
+    current.lastDate = item.date || current.lastDate
+    map.set(item.id, current)
+    return map
+  }, new Map())
+}
+
+function reviewCountSummary(card, metrics = null) {
+  const attempts = Math.max(
+    0,
+    Number(card?.reviewAttempts || 0),
+    Number(card?.siteReps || 0),
+    Number(metrics?.attempts || 0)
+  )
+  const corrects = Math.max(0, Number(card?.reviewCorrect || 0), Number(metrics?.corrects || 0))
+  const wrongs = Math.max(0, Number(card?.reviewWrong || 0), Number(metrics?.wrongs || 0))
+
+  return { attempts, corrects, wrongs }
+}
+
+function totalSiteReps(card, metrics = null) {
+  return reviewCountSummary(card, metrics).attempts
 }
 
 function reviewStageDetails(card) {
@@ -296,9 +322,14 @@ function reviewStageDetails(card) {
   }
 }
 
-function sortCardsByDifficulty(a, b) {
-  const repsDiff = totalSiteReps(b) - totalSiteReps(a)
+function sortCardsByDifficulty(a, b, metricsByCard = new Map()) {
+  const aSummary = reviewCountSummary(a, metricsByCard.get(a.id))
+  const bSummary = reviewCountSummary(b, metricsByCard.get(b.id))
+  const repsDiff = bSummary.attempts - aSummary.attempts
   if (repsDiff) return repsDiff
+
+  const wrongsDiff = bSummary.wrongs - aSummary.wrongs
+  if (wrongsDiff) return wrongsDiff
 
   const aStage = reviewStageDetails(a)
   const bStage = reviewStageDetails(b)
@@ -1322,11 +1353,12 @@ export default function App() {
     pendingGrade?.cardId === current.id ||
     feedback?.cardId === current.id
   )
+  const reviewMetricsByCard = useMemo(() => buildCardReviewMetrics(stats.history), [stats.history])
   const filteredCards = activeCards.filter(c => {
     const q = normalize(searchTerm)
     if (!q) return true
     return normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
-  }).sort(sortCardsByDifficulty)
+  }).sort((a, b) => sortCardsByDifficulty(a, b, reviewMetricsByCard))
   const statsPanel = (
     <>
       <section className="stats stats-summary">
@@ -1544,12 +1576,17 @@ export default function App() {
 
   function scheduleCard(card, grade) {
     const nextSchedule = previewSchedule(card, grade)
+    const isCorrectGrade = grade === 'good' || grade === 'easy'
+    const previousAttempts = Math.max(Number(card.reviewAttempts || 0), Number(card.siteReps || 0))
 
     return {
       ...card,
       dueAt: Date.now() + nextSchedule.delay,
       reps: Number(card.reps || 0),
       siteReps: Number(card.siteReps || 0) + 1,
+      reviewAttempts: previousAttempts + 1,
+      reviewCorrect: Number(card.reviewCorrect || 0) + (isCorrectGrade ? 1 : 0),
+      reviewWrong: Number(card.reviewWrong || 0) + (isCorrectGrade ? 0 : 1),
       correctCount: nextSchedule.correctCount,
       reviewLevel: nextSchedule.level,
       stageProgress: nextSchedule.progress,
@@ -2411,7 +2448,8 @@ export default function App() {
             {filteredCards.map((c, i) => {
               const v = getCardView(c)
               const stage = reviewStageDetails(v)
-              const reps = totalSiteReps(v)
+              const reviewSummary = reviewCountSummary(v, reviewMetricsByCard.get(v.id))
+              const reps = reviewSummary.attempts
               return (
                 <div className={`mini ${c.suspended ? 'suspended' : ''}`} key={c.id}>
                   <div className="library-card-top">
@@ -2476,7 +2514,8 @@ export default function App() {
                   <div className="library-meta">
                     {v.isCloze && <span>Cloze</span>}
                     <span><b>Repetições:</b> {reps}</span>
-                    <span><b>Acertos:</b> {v.correctCount || 0}</span>
+                    <span><b>Acertos:</b> {reviewSummary.corrects}</span>
+                    <span><b>Erros:</b> {reviewSummary.wrongs}</span>
                     <span><b>Categoria:</b> {stage.label}</span>
                     <span><b>Progresso:</b> {stage.progress}</span>
                     <span><b>Próxima revisão:</b> {hasScheduledDue(v) ? new Date(dueTimestamp(v)).toLocaleString('pt-BR') : 'inédito'}</span>
