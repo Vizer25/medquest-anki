@@ -54,11 +54,13 @@ h1{font-size:48px;color:#101828;margin:0}
 .stats svg{width:18px;height:18px}
 .stats span{display:block;color:#667085;margin:6px 0 4px;font-size:12px}
 .stats b{font-size:22px}
-.stats-summary{grid-template-columns:1.35fr repeat(4,1fr) 1.1fr repeat(2,.95fr);align-items:stretch}
+.stats-summary{grid-template-columns:1.35fr 1.15fr repeat(4,1fr) 1.1fr repeat(2,.95fr);align-items:stretch}
 .stat-card{position:relative}
 .stat-card small{display:block;color:#98a2b3;font-size:11px;font-weight:800;margin-top:2px}
 .stat-today{border-color:#2f9e67!important;background:#f0faf5!important;box-shadow:inset 4px 0 0 #2f9e67!important}
 .stat-today svg,.stat-today b{color:#168a4a!important}
+.stat-new-today{border-color:#c7d7fe!important;background:#eef4ff!important}
+.stat-new-today svg,.stat-new-today b{color:#2f5bea!important}
 .stat-streak{border-color:#fed7aa!important;background:#fff7ed!important}
 .stat-streak svg{color:#f97316!important}
 .stat-streak b{color:#c2410c!important}

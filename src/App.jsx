@@ -368,6 +368,27 @@ function dailyUniqueCount(stats, dayKey) {
   return Number(stats.daily?.[dayKey] || 0)
 }
 
+function dailyNewCardCount(stats, dayKey) {
+  const history = stats.history || []
+  const firstDayByCard = new Map()
+  const explicitlyNewToday = new Set()
+
+  history.forEach(item => {
+    if (!item?.id) return
+    const itemDay = historyItemDayKey(item)
+    if (!firstDayByCard.has(item.id)) firstDayByCard.set(item.id, itemDay)
+    if (item.isNewCard && itemDay === dayKey) explicitlyNewToday.add(item.id)
+  })
+
+  let count = explicitlyNewToday.size
+  firstDayByCard.forEach((firstDay, cardId) => {
+    if (firstDay === dayKey) explicitlyNewToday.add(cardId)
+  })
+  count = explicitlyNewToday.size
+
+  return count
+}
+
 function normalize(text) {
   return String(text || '')
     .toLowerCase()
@@ -1309,6 +1330,7 @@ export default function App() {
   const current = dueCards.length ? dueCards[index % dueCards.length] : null
   const currentView = current ? getCardView(current) : null
   const todayDone = dailyUniqueCount(stats, todayKey())
+  const todayNewCards = dailyNewCardCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
@@ -1363,6 +1385,7 @@ export default function App() {
     <>
       <section className="stats stats-summary">
         <div className="stat-card stat-today"><ListChecks/><span>Feitos hoje</span><b>{todayDone}</b><small>{remainingToday} para a meta</small></div>
+        <div className="stat-card stat-new-today"><Plus/><span>Inéditos hoje</span><b>{todayNewCards}</b><small>{Math.max(0, todayDone - todayNewCards)} revisões</small></div>
         <div className="stat-card"><Target/><span>Total de cards feitos</span><b>{totalAnswered}</b></div>
         <div className="stat-card"><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
         <div className="stat-card"><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
@@ -1618,6 +1641,7 @@ export default function App() {
     setStats(prevRaw => {
       const prev = safeStats(prevRaw)
       const dailyPatch = markDailyDone(prev, current.id)
+      const isNewCard = !hasReviewHistory(current) && !(prev.history || []).some(item => item.id === current.id)
       const newXp = Math.max(0, (prev.xp || 0) + xpDelta)
       const newStreak = isCorrect ? (prev.streak || 0) + 1 : 0
       const historyItem = {
@@ -1626,6 +1650,7 @@ export default function App() {
         percent,
         grade,
         correct: isCorrect,
+        isNewCard,
         seconds: cardSeconds,
         day: todayKey(),
         date: new Date().toISOString()
