@@ -412,6 +412,20 @@ function historyCardIds(stats) {
   return new Set((stats.history || []).map(item => item?.id).filter(Boolean))
 }
 
+function reviewRatioStreak(stats) {
+  const today = todayKey()
+  const todayHistory = (stats.history || []).filter(item => historyItemDayKey(item) === today)
+  let reviews = 0
+
+  for (let index = todayHistory.length - 1; index >= 0; index -= 1) {
+    if (todayHistory[index]?.isNewCard) break
+    reviews += 1
+    if (reviews >= 2) break
+  }
+
+  return reviews
+}
+
 function isUnseenStudyCard(card, seenIds) {
   return !hasReviewHistory(card) && !seenIds.has(card.id)
 }
@@ -436,10 +450,16 @@ function sortReviewQueue(cards, now = Date.now()) {
   })
 }
 
-function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now()) {
-  const unseen = sortDueQueue(cards.filter(card => isUnseenStudyCard(card, seenIds)), now)
-  const unseenIds = new Set(unseen.map(card => card.id))
-  const reviews = sortReviewQueue(cards.filter(card => !unseenIds.has(card.id)), now)
+function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now(), recentReviewStreak = 0) {
+  const unseenCandidates = cards.filter(card => isUnseenStudyCard(card, seenIds))
+  const unseen = sortDueQueue(
+    shouldPullUnseen ? unseenCandidates : unseenCandidates.filter(card => isCardDue(card, now)),
+    now
+  )
+  const reviews = sortReviewQueue(
+    cards.filter(card => !isUnseenStudyCard(card, seenIds) && isCardDue(card, now)),
+    now
+  )
 
   if (!shouldPullUnseen || !unseen.length) return [...reviews, ...unseen]
   if (!reviews.length) return unseen
@@ -447,9 +467,10 @@ function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now()) {
   const queue = []
   let reviewIndex = 0
   let unseenIndex = 0
+  let reviewQuota = Math.max(0, 2 - Math.min(2, recentReviewStreak))
 
   while (reviewIndex < reviews.length || unseenIndex < unseen.length) {
-    for (let count = 0; count < 2 && reviewIndex < reviews.length; count += 1) {
+    for (let count = 0; count < reviewQuota && reviewIndex < reviews.length; count += 1) {
       queue.push(reviews[reviewIndex])
       reviewIndex += 1
     }
@@ -457,6 +478,7 @@ function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now()) {
       queue.push(unseen[unseenIndex])
       unseenIndex += 1
     }
+    reviewQuota = 2
     if (reviewIndex >= reviews.length) {
       while (unseenIndex < unseen.length) {
         queue.push(unseen[unseenIndex])
@@ -1387,6 +1409,7 @@ export default function App() {
   const todayNewCards = dailyNewCardCount(stats, todayKey())
   const remainingNewToday = Math.max(0, Number(config.newDailyGoal || 0) - todayNewCards)
   const seenCardIds = useMemo(() => historyCardIds(stats), [stats.history])
+  const reviewStreakForNewRatio = useMemo(() => reviewRatioStreak(stats), [stats.history])
   const dueRefreshKey = Math.floor(Date.now() / 30000)
   const dueCards = useMemo(() => {
     const now = Date.now()
@@ -1396,20 +1419,19 @@ export default function App() {
     const dueBase = base.filter(c => isCardDue(c, now))
     const due = focusedCards.length
       ? sortDueQueue(dueBase, now)
-      : buildStudyQueue(dueBase, seenCardIds, remainingNewToday > 0, now)
+      : buildStudyQueue(base, seenCardIds, remainingNewToday > 0, now, reviewStreakForNewRatio)
 
     if (focusedCards.length && !due.length) {
-      const fallbackDue = activeCards.filter(c =>
+      const fallbackBase = activeCards.filter(c =>
         !c.deleted &&
         !c.suspended &&
-        (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag)) &&
-        isCardDue(c, now)
+        (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag))
       )
-      return buildStudyQueue(fallbackDue, seenCardIds, remainingNewToday > 0, now)
+      return buildStudyQueue(fallbackBase, seenCardIds, remainingNewToday > 0, now, reviewStreakForNewRatio)
     }
 
     return due
-  }, [activeCards, focusedCards, studyTag, dueRefreshKey, remainingNewToday, seenCardIds])
+  }, [activeCards, focusedCards, studyTag, dueRefreshKey, remainingNewToday, seenCardIds, reviewStreakForNewRatio])
   const answeredCardId = pendingGrade?.cardId || feedback?.cardId || ''
   const queuedCurrent = dueCards.length ? dueCards[index % dueCards.length] : null
   const answeredCurrent = answeredCardId ? activeCards.find(card => card.id === answeredCardId) : null
@@ -1792,20 +1814,22 @@ export default function App() {
 
     const focusedIds = new Set(focusedCardIds)
     let shouldClearFocus = false
-    let freshDue = updatedCards.filter(c => {
+    let freshPool = updatedCards.filter(c => {
       if (c.deleted || c.suspended) return false
       if (focusedIds.size && !focusedIds.has(c.id)) return false
       if (!focusedIds.size && studyTag && !String(c.tags || '').split(/\s+/).includes(studyTag)) return false
-      return isCardDue(c)
+      return true
     })
+    let freshDue = freshPool.filter(c => isCardDue(c))
 
     if (!freshDue.length && focusedIds.size) {
       shouldClearFocus = true
-      freshDue = updatedCards.filter(c => {
+      freshPool = updatedCards.filter(c => {
         if (c.deleted || c.suspended) return false
         if (studyTag && !String(c.tags || '').split(/\s+/).includes(studyTag)) return false
-        return isCardDue(c)
+        return true
       })
+      freshDue = freshPool.filter(c => isCardDue(c))
     }
 
     setCards(updatedCards)
@@ -1814,14 +1838,15 @@ export default function App() {
     setPendingGrade(null)
     if (shouldClearFocus) setFocusedCardIds([])
 
-    if (freshDue.length <= 1) {
+    const sortedDue = focusedIds.size
+      ? sortDueQueue(freshDue)
+      : buildStudyQueue(freshPool, seenCardIds, remainingNewToday > 0, Date.now(), reviewStreakForNewRatio)
+
+    if (sortedDue.length <= 1) {
       setIndex(0)
       return
     }
 
-    const sortedDue = focusedIds.size
-      ? sortDueQueue(freshDue)
-      : buildStudyQueue(freshDue, seenCardIds, remainingNewToday > 0)
     const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
     const pool = alternatives.length ? alternatives : sortedDue
     const next = pool[0]
