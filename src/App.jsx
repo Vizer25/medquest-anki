@@ -57,6 +57,7 @@ const REVIEW_STAGES = [
   { level: 2, label: '1 semana', delay: 7 * DAY },
   { level: 3, label: '1 mês', delay: 30 * DAY }
 ]
+const REVIEW_STAGE_NAMES = ['10 minutos', 'Diária', 'Semanal', 'Mensal']
 
 function clearStoredAuthSession() {
   try {
@@ -264,6 +265,50 @@ function previewSchedule(card, grade) {
     label: stage.label,
     correctCount: level * 2 + progress
   }
+}
+
+function totalSiteReps(card) {
+  return Math.max(0, Number(card?.siteReps || 0))
+}
+
+function reviewStageDetails(card) {
+  if (!hasReviewHistory(card)) {
+    return {
+      level: -1,
+      label: 'Inédito',
+      className: 'stage-new',
+      progress: 'Ainda não revisado no site'
+    }
+  }
+
+  const state = inferReviewState(card)
+  const label = REVIEW_STAGE_NAMES[state.level] || REVIEW_STAGES[state.level]?.label || '10 minutos'
+  const nextLabel = REVIEW_STAGE_NAMES[state.level + 1]
+  const progress = state.level >= REVIEW_STAGES.length - 1
+    ? 'Categoria final: revisão mensal'
+    : `${state.progress}/2 acertos para ir para ${nextLabel.toLowerCase()}`
+
+  return {
+    level: state.level,
+    label,
+    className: `stage-${state.level}`,
+    progress
+  }
+}
+
+function sortCardsByDifficulty(a, b) {
+  const repsDiff = totalSiteReps(b) - totalSiteReps(a)
+  if (repsDiff) return repsDiff
+
+  const aStage = reviewStageDetails(a)
+  const bStage = reviewStageDetails(b)
+  if (aStage.level !== bStage.level) return bStage.level - aStage.level
+
+  const aDue = dueTimestamp(a, Number.MAX_SAFE_INTEGER)
+  const bDue = dueTimestamp(b, Number.MAX_SAFE_INTEGER)
+  if (aDue !== bDue) return aDue - bDue
+
+  return String(a.pergunta || '').localeCompare(String(b.pergunta || ''), 'pt-BR')
 }
 
 function historyItemDayKey(item) {
@@ -1274,7 +1319,7 @@ export default function App() {
     const q = normalize(searchTerm)
     if (!q) return true
     return normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
-  })
+  }).sort(sortCardsByDifficulty)
   const statsPanel = (
     <>
       <section className="stats stats-summary">
@@ -2354,13 +2399,19 @@ export default function App() {
               </button>
             ))}
           </div>
-          <p className="hint">{filteredCards.length} de {activeCards.length} flashcards encontrados. Suspensos: {suspendedCount}. Excluidos preservados: {deletedCount}.</p>
+          <p className="hint">{filteredCards.length} de {activeCards.length} flashcards encontrados, ordenados por maior número de repetições no site. Suspensos: {suspendedCount}. Excluidos preservados: {deletedCount}.</p>
           <div className="grid-cards">
             {filteredCards.map((c, i) => {
               const v = getCardView(c)
+              const stage = reviewStageDetails(v)
+              const reps = totalSiteReps(v)
               return (
                 <div className={`mini ${c.suspended ? 'suspended' : ''}`} key={c.id}>
-                  {c.suspended && <span className="status-chip">Suspenso</span>}
+                  <div className="library-card-top">
+                    <span className={`review-stage-chip ${stage.className}`}>{stage.label}</span>
+                    <span className="repeat-chip">{reps} repetições</span>
+                    {c.suspended && <span className="status-chip">Suspenso</span>}
+                  </div>
                   <b>{i+1}. {v.pergunta}</b>
                   <div dangerouslySetInnerHTML={{__html: v.htmlFront || v.pergunta}} />
                   <p><b>Resposta:</b> {v.resposta}</p>
@@ -2413,7 +2464,14 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                  <small>{v.isCloze ? 'Cloze | ' : ''}Reps: {v.siteReps || 0} | Acertos: {v.correctCount || 0} | Proxima revisao: {hasScheduledDue(v) ? new Date(dueTimestamp(v)).toLocaleString('pt-BR') : 'inédito'}</small>
+                  <div className="library-meta">
+                    {v.isCloze && <span>Cloze</span>}
+                    <span><b>Repetições:</b> {reps}</span>
+                    <span><b>Acertos:</b> {v.correctCount || 0}</span>
+                    <span><b>Categoria:</b> {stage.label}</span>
+                    <span><b>Progresso:</b> {stage.progress}</span>
+                    <span><b>Próxima revisão:</b> {hasScheduledDue(v) ? new Date(dueTimestamp(v)).toLocaleString('pt-BR') : 'inédito'}</span>
+                  </div>
                 </div>
               )
             })}
