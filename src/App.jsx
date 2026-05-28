@@ -1276,6 +1276,7 @@ export default function App() {
   const [config, setConfig] = useState(DEFAULT_CONFIG)
   const [stats, setStats] = useState(DEFAULT_STATS)
   const [index, setIndex] = useState(0)
+  const [currentCardId, setCurrentCardId] = useState('')
   const [answer, setAnswer] = useState('')
   const [feedback, setFeedback] = useState(null)
   const [pendingGrade, setPendingGrade] = useState(null)
@@ -1441,7 +1442,10 @@ export default function App() {
   const answeredCardId = pendingGrade?.cardId || feedback?.cardId || ''
   const queuedCurrent = dueCards.length ? dueCards[index % dueCards.length] : null
   const answeredCurrent = answeredCardId ? activeCards.find(card => card.id === answeredCardId) : null
-  const current = answeredCurrent || queuedCurrent
+  const lockedCurrent = currentCardId ? activeCards.find(card => card.id === currentCardId && !card.deleted && !card.suspended) : null
+  const current = answeredCurrent || lockedCurrent || queuedCurrent
+  const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
+  const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
   const currentView = current ? getCardView(current) : null
   const todayDone = dailyUniqueCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
@@ -1595,6 +1599,15 @@ export default function App() {
 
   saveStats()
 }, [stats, ready, logged, user])
+
+  useEffect(() => {
+    if (currentCardId) {
+      const exists = activeCards.some(card => card.id === currentCardId && !card.deleted && !card.suspended)
+      if (!exists) setCurrentCardId(queuedCurrent?.id || '')
+      return
+    }
+    if (queuedCurrent) setCurrentCardId(queuedCurrent.id)
+  }, [currentCardId, queuedCurrent?.id, activeCards])
 
   useEffect(() => {
     if (!ready || !logged) return
@@ -1867,12 +1880,14 @@ export default function App() {
 
     if (sortedDue.length <= 1) {
       setIndex(0)
+      setCurrentCardId(sortedDue[0]?.id || '')
       return
     }
 
     const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
     const pool = alternatives.length ? alternatives : sortedDue
     const next = pool[0]
+    setCurrentCardId(next?.id || '')
     setIndex(Math.max(0, sortedDue.findIndex(card => card.id === next.id)))
   }
 
@@ -1882,6 +1897,7 @@ export default function App() {
     setSiteSeconds(0)
     setCardSeconds(0)
     setIndex(0)
+    setCurrentCardId('')
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
@@ -1921,6 +1937,7 @@ export default function App() {
     setImportLog('Novo card criado.')
     setTab('study')
     setIndex(0)
+    setCurrentCardId(card.id)
   }
 
   function insertAnswerSymbol(symbol) {
@@ -2100,6 +2117,7 @@ export default function App() {
     const pos = freshDue.findIndex(c => c.id === lastAnsweredId)
     setCards(updated)
     setIndex(pos >= 0 ? pos : 0)
+    setCurrentCardId(lastAnsweredId)
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
@@ -2145,6 +2163,7 @@ export default function App() {
     setFocusedCardIds([cardId])
     setStudyTag('')
     setIndex(0)
+    setCurrentCardId(cardId)
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
@@ -2282,6 +2301,7 @@ export default function App() {
     setFocusedCardIds([])
     setStudyTag('')
     setIndex(0)
+    setCurrentCardId('')
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
@@ -2336,6 +2356,7 @@ export default function App() {
           return result.merged
         })
         setIndex(0)
+        setCurrentCardId('')
       } else {
         setImportLog('Nao consegui ler o CSV. Use: pergunta;resposta;imagem(opcional)')
       }
@@ -2405,6 +2426,7 @@ export default function App() {
         return result.merged
       })
       setIndex(0)
+      setCurrentCardId('')
     } catch (err) {
       console.error(err)
       setImportLog(`Erro ao importar APKG: ${err.message || String(err)}`)
@@ -2457,7 +2479,7 @@ export default function App() {
       )}
 
       <nav className="tabs">
-        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setIndex(0); setTab('study') }}><Brain size={18}/> Estudar</button>
+        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setIndex(0); setCurrentCardId(''); setTab('study') }}><Brain size={18}/> Estudar</button>
         <button className={tab==='cards'?'active':''} onClick={()=>setTab('cards')}><Eye size={18}/> Ver flashcards</button>
         <button className={tab==='import'?'active':''} onClick={()=>setTab('import')}><Upload size={18}/> Importar</button>
         <button className={tab==='create'?'active':''} onClick={()=>setTab('create')}><Plus size={18}/> Criar card</button>
@@ -2481,6 +2503,7 @@ export default function App() {
                   setStudyTag(e.target.value)
                   setFocusedCardIds([])
                   setIndex(0)
+                  setCurrentCardId('')
                   setAnswer('')
                   setFeedback(null)
                   setPendingGrade(null)
@@ -2505,7 +2528,7 @@ export default function App() {
           ) : (
             <>
               <div className="card-top">
-                <span className="card-count">Card vencido {Math.min(index + 1, dueCards.length)} de {dueCards.length}</span>
+                <span className="card-count">Card vencido {currentQueueNumber} de {dueCards.length}</span>
                 <span className={timeChallenge && !currentAlreadyAnswered ? `challenge-timer ${challengeLeft <= 10 ? 'urgent' : ''}` : 'timer-chip'}>
                   {timeChallenge && !currentAlreadyAnswered ? `${challengeLeft}s` : formatTime(cardSeconds)}
                 </span>
@@ -2609,6 +2632,10 @@ export default function App() {
                   setStudyTag(tag)
                   setFocusedCardIds([])
                   setIndex(0)
+                  setCurrentCardId('')
+                  setAnswer('')
+                  setFeedback(null)
+                  setPendingGrade(null)
                   setTab('study')
                 }}
               >
