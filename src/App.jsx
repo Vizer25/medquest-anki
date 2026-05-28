@@ -1450,6 +1450,9 @@ export default function App() {
   const todayDone = dailyUniqueCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
+  const seenDeckCount = activeCards.filter(card => seenCardIds.has(card.id) || hasReviewHistory(card)).length
+  const seenDeckPercent = activeCards.length ? Math.round((seenDeckCount / activeCards.length) * 100) : 0
+  const exposurePercent = activeCards.length ? Math.round((totalAnswered / activeCards.length) * 100) : 0
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
   const avgTime = totalAnswered ? Math.round(Number(stats.totalAnswerSeconds || 0) / totalAnswered) : 0
   const progress = Math.min(100, Number(stats.xp || 0) % 100)
@@ -1525,7 +1528,7 @@ export default function App() {
         <div className="stat-card"><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
         <div className="stat-card"><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
         <div className="stat-card stat-streak"><Flame/><span>Streak</span><b>{stats.studyStreak}</b><small>dias com meta batida</small></div>
-        <div className="stat-card"><ImageIcon/><span>Total no deck</span><b>{activeCards.length}</b></div>
+        <div className="stat-card stat-seen-deck"><Eye/><span>Deck visto</span><b>{seenDeckPercent}%</b><small>{seenDeckCount} de {activeCards.length}</small></div>
         <div className="stat-card"><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
       </section>
       {tab === 'stats' && (
@@ -2840,6 +2843,7 @@ export default function App() {
             </div>
           </div>
           <div className="advanced-grid">
+            <div className="advanced-box"><span>Exposição acumulada</span><b>{exposurePercent}%</b><small>100% = uma volta completa no deck</small></div>
             <div className="advanced-box"><span>Tempo médio</span><b>{formatTime(avgTime)}</b><small>Total: {formatTime(stats.totalAnswerSeconds)}</small></div>
             <div className="advanced-box"><span>Mais rápido</span><b>{stats.fastestSeconds == null ? '--' : formatTime(stats.fastestSeconds)}</b><small>Menor tempo</small></div>
             <div className="advanced-box"><span>Mais lento</span><b>{formatTime(stats.slowestSeconds)}</b><small>Maior tempo</small></div>
