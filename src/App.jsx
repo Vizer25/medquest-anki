@@ -398,13 +398,25 @@ function isUnseenStudyCard(card, seenIds) {
   return !hasReviewHistory(card) && !seenIds.has(card.id)
 }
 
+function isLearningReplayCard(card) {
+  if (!hasReviewHistory(card)) return false
+  const state = inferReviewState(card)
+  return state.level === 0
+}
+
 function prioritizeUnseenQueue(cards, seenIds, now = Date.now()) {
   const sorted = sortDueQueue(cards, now)
+  const learningReplay = sortDueQueue(cards.filter(isLearningReplayCard), now)
   const unseen = sortDueQueue(cards.filter(card => isUnseenStudyCard(card, seenIds)), now)
-  if (!unseen.length) return sorted
+  if (!learningReplay.length && !unseen.length) return sorted
 
+  const learningReplayIds = new Set(learningReplay.map(card => card.id))
   const unseenIds = new Set(unseen.map(card => card.id))
-  return [...unseen, ...sorted.filter(card => !unseenIds.has(card.id))]
+  return [
+    ...learningReplay,
+    ...unseen.filter(card => !learningReplayIds.has(card.id)),
+    ...sorted.filter(card => !learningReplayIds.has(card.id) && !unseenIds.has(card.id))
+  ]
 }
 
 function normalize(text) {
