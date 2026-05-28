@@ -54,10 +54,10 @@ const STREAK_MIN_CARDS = 10
 const REVIEW_STAGES = [
   { level: 0, label: '10 minutos', delay: 10 * 60 * 1000 },
   { level: 1, label: '3 dias', delay: 3 * DAY },
-  { level: 2, label: '1 semana', delay: 7 * DAY },
+  { level: 2, label: '10 dias', delay: 10 * DAY },
   { level: 3, label: '1 mês', delay: 30 * DAY }
 ]
-const REVIEW_STAGE_NAMES = ['10 minutos', '3 dias', 'Semanal', 'Mensal']
+const REVIEW_STAGE_NAMES = ['10 minutos', '3 dias', '10 dias', 'Mensal']
 
 function clearStoredAuthSession() {
   try {
@@ -220,19 +220,36 @@ function sortDueQueue(cards, now = Date.now()) {
   })
 }
 
+function requiredCorrectsForStage(level) {
+  return level === 2 ? 1 : 2
+}
+
+function correctCountFromReviewState(level, progress) {
+  if (level <= 0) return progress
+  if (level === 1) return 2 + progress
+  if (level === 2) return 4 + progress
+  return 5
+}
+
+function reviewStateFromCorrectCount(correctCount) {
+  const corrects = Math.max(0, Number(correctCount || 0))
+  if (corrects >= 5) return { level: 3, progress: 0 }
+  if (corrects >= 4) return { level: 2, progress: 0 }
+  if (corrects >= 2) return { level: 1, progress: Math.min(1, corrects - 2) }
+  return { level: 0, progress: Math.min(1, corrects) }
+}
+
 function inferReviewState(card) {
   if (Number.isFinite(Number(card?.reviewLevel)) || Number.isFinite(Number(card?.stageProgress))) {
+    const level = Math.max(0, Math.min(3, Number(card.reviewLevel || 0)))
+    const maxProgress = Math.max(0, requiredCorrectsForStage(level) - 1)
     return {
-      level: Math.max(0, Math.min(3, Number(card.reviewLevel || 0))),
-      progress: Math.max(0, Math.min(1, Number(card.stageProgress || 0)))
+      level,
+      progress: Math.max(0, Math.min(maxProgress, Number(card.stageProgress || 0)))
     }
   }
 
-  const legacyCorrects = Math.max(0, Number(card?.correctCount || 0))
-  return {
-    level: Math.max(0, Math.min(3, Math.floor(legacyCorrects / 2))),
-    progress: legacyCorrects >= 6 ? 0 : legacyCorrects % 2
-  }
+  return reviewStateFromCorrectCount(card?.correctCount)
 }
 
 function previewSchedule(card, grade) {
@@ -250,11 +267,11 @@ function previewSchedule(card, grade) {
     }
   } else {
     progress += 1
-    if (progress >= 2 && level < REVIEW_STAGES.length - 1) {
+    if (progress >= requiredCorrectsForStage(level) && level < REVIEW_STAGES.length - 1) {
       level += 1
       progress = 0
     } else if (level === REVIEW_STAGES.length - 1) {
-      progress = Math.min(1, progress)
+      progress = Math.min(requiredCorrectsForStage(level) - 1, progress)
     }
   }
 
@@ -264,7 +281,7 @@ function previewSchedule(card, grade) {
     progress,
     delay: stage.delay,
     label: stage.label,
-    correctCount: level * 2 + progress
+    correctCount: correctCountFromReviewState(level, progress)
   }
 }
 
@@ -311,9 +328,10 @@ function reviewStageDetails(card) {
   const state = inferReviewState(card)
   const label = REVIEW_STAGE_NAMES[state.level] || REVIEW_STAGES[state.level]?.label || '10 minutos'
   const nextLabel = REVIEW_STAGE_NAMES[state.level + 1]
+  const required = requiredCorrectsForStage(state.level)
   const progress = state.level >= REVIEW_STAGES.length - 1
     ? 'Categoria final: revisão mensal'
-    : `${state.progress}/2 acertos para ir para ${nextLabel.toLowerCase()}`
+    : `${state.progress}/${required} acertos para ir para ${nextLabel.toLowerCase()}`
 
   return {
     level: state.level,
@@ -2747,7 +2765,8 @@ export default function App() {
           <h2>Configurações de espaçamento</h2>
           <p className="hint">
             Regra atual: cada fase precisa de 2 acertos para avançar. Primeiro ciclo: 10 minutos;
-            depois 3 dias; depois 1 semana; depois 1 mês. Ao errar, o card cai uma fase.
+            depois 3 dias; depois 10 dias; depois 1 mês. A fase de 10 dias precisa de apenas 1 acerto para virar mensal.
+            Ao errar, o card cai uma fase.
             Enquanto houver meta de inéditos pendente, a fila intercala 2 revisões para 1 inédito.
           </p>
           <div className="settings-grid">
