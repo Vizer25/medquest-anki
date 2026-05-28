@@ -1016,6 +1016,13 @@ function getCardView(card) {
   }
 }
 
+function shouldShowLibraryFrontPreview(card) {
+  const html = String(card?.htmlFront || '').trim()
+  if (!html) return false
+  if (/<(img|picture|video|audio|svg|table)\b/i.test(html)) return true
+  return normalize(stripHtml(html)) !== normalize(card?.pergunta || '')
+}
+
 function RichTextEditor({ value, onChange }) {
   const editorRef = useRef(null)
   const lastHtmlRef = useRef(null)
@@ -2413,7 +2420,9 @@ export default function App() {
                     {c.suspended && <span className="status-chip">Suspenso</span>}
                   </div>
                   <b>{i+1}. {v.pergunta}</b>
-                  <div dangerouslySetInnerHTML={{__html: v.htmlFront || v.pergunta}} />
+                  {shouldShowLibraryFrontPreview(v) && (
+                    <div className="library-front-preview" dangerouslySetInnerHTML={{__html: v.htmlFront}} />
+                  )}
                   <p><b>Resposta:</b> {v.resposta}</p>
                   {libraryEditingId === c.id && editing && (
                     <div className="edit-box">
