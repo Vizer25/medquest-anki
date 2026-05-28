@@ -55,9 +55,9 @@ const REVIEW_STAGES = [
   { level: 0, label: '10 minutos', delay: 10 * 60 * 1000 },
   { level: 1, label: '3 dias', delay: 3 * DAY },
   { level: 2, label: '10 dias', delay: 10 * DAY },
-  { level: 3, label: '1 mês', delay: 30 * DAY }
+  { level: 3, label: '30 dias', delay: 30 * DAY }
 ]
-const REVIEW_STAGE_NAMES = ['10 minutos', '3 dias', '10 dias', 'Mensal']
+const REVIEW_STAGE_NAMES = ['10 minutos', '3 dias', '10 dias', '30 dias']
 
 function clearStoredAuthSession() {
   try {
@@ -330,7 +330,7 @@ function reviewStageDetails(card) {
   const nextLabel = REVIEW_STAGE_NAMES[state.level + 1]
   const required = requiredCorrectsForStage(state.level)
   const progress = state.level >= REVIEW_STAGES.length - 1
-    ? 'Categoria final: revisão mensal'
+    ? 'Categoria final: revisão de 30 dias'
     : `${state.progress}/${required} acertos para ir para ${nextLabel.toLowerCase()}`
 
   return {
@@ -339,6 +339,11 @@ function reviewStageDetails(card) {
     className: `stage-${state.level}`,
     progress
   }
+}
+
+function reviewCategoryKey(card) {
+  if (!hasReviewHistory(card)) return 'new'
+  return String(inferReviewState(card).level)
 }
 
 function sortCardsByDifficulty(a, b, metricsByCard = new Map()) {
@@ -1284,6 +1289,7 @@ export default function App() {
   const [cardSeconds, setCardSeconds] = useState(0)
   const [importLog, setImportLog] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
+  const [cardStageFilter, setCardStageFilter] = useState('all')
   const [studyTag, setStudyTag] = useState('')
   const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
@@ -1483,10 +1489,27 @@ export default function App() {
     feedback?.cardId === current.id
   )
   const reviewMetricsByCard = useMemo(() => buildCardReviewMetrics(stats.history), [stats.history])
+  const reviewCategoryCounts = useMemo(() => {
+    const counts = { all: activeCards.length, new: 0, 0: 0, 1: 0, 2: 0, 3: 0 }
+    activeCards.forEach(card => {
+      const key = reviewCategoryKey(card)
+      counts[key] = (counts[key] || 0) + 1
+    })
+    return counts
+  }, [activeCards])
+  const reviewCategoryOptions = [
+    { key: 'all', label: 'Todos' },
+    { key: 'new', label: 'Inéditos' },
+    { key: '0', label: '10 minutos' },
+    { key: '1', label: '3 dias' },
+    { key: '2', label: '10 dias' },
+    { key: '3', label: '30 dias' }
+  ]
   const filteredCards = activeCards.filter(c => {
     const q = normalize(searchTerm)
-    if (!q) return true
-    return normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
+    const matchesSearch = !q || normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
+    const matchesStage = cardStageFilter === 'all' || reviewCategoryKey(c) === cardStageFilter
+    return matchesSearch && matchesStage
   }).sort((a, b) => sortCardsByDifficulty(a, b, reviewMetricsByCard))
   const statsPanel = (
     <>
@@ -2564,6 +2587,19 @@ export default function App() {
             placeholder="Buscar flashcard por pergunta, resposta ou tag..."
             className="search-input"
           />
+          <div className="stage-filter">
+            {reviewCategoryOptions.map(option => (
+              <button
+                key={option.key}
+                type="button"
+                className={`${cardStageFilter === option.key ? 'active ' : ''}${option.key === 'all' ? 'stage-all' : option.key === 'new' ? 'stage-new' : `stage-${option.key}`}`}
+                onClick={() => setCardStageFilter(option.key)}
+              >
+                <span>{option.label}</span>
+                <b>{reviewCategoryCounts[option.key] || 0}</b>
+              </button>
+            ))}
+          </div>
           <div className="tag-cloud">
             {allTags.map(tag => (
               <button
@@ -2790,7 +2826,7 @@ export default function App() {
           <h2>Configurações de espaçamento</h2>
           <p className="hint">
             Regra atual: cada fase precisa de 2 acertos para avançar. Primeiro ciclo: 10 minutos;
-            depois 3 dias; depois 10 dias; depois 1 mês. A fase de 10 dias precisa de apenas 1 acerto para virar mensal.
+            depois 3 dias; depois 10 dias; depois 30 dias. A fase de 10 dias precisa de apenas 1 acerto para virar 30 dias.
             Ao errar, o card cai uma fase.
             Enquanto houver meta de inéditos pendente, a fila intercala 2 revisões para 1 inédito.
           </p>
