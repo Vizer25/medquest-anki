@@ -642,6 +642,19 @@ function answerTokens(text) {
     .filter(w => w.length > 2 && !STOP_WORDS.has(w))
 }
 
+function comparableAnswerText(text) {
+  return canonicalizeMedicalText(text)
+    .replace(/\bml\s+h\b/g, 'mlh')
+    .replace(/\bml\s+hora\b/g, 'mlh')
+    .replace(/\bml\s+por\s+hora\b/g, 'mlh')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function compactComparableAnswerText(text) {
+  return comparableAnswerText(text).replace(/\s+/g, '')
+}
+
 function editDistance(a, b) {
   if (a === b) return 0
   if (Math.abs(a.length - b.length) > 2) return 3
@@ -921,6 +934,13 @@ function semanticTargetText(expectedText, questionText) {
 
 function semanticScore(expectedText, userText, questionText = '') {
   const targetText = semanticTargetText(expectedText, questionText)
+  const expectedComparable = comparableAnswerText(targetText)
+  const userComparable = comparableAnswerText(userText)
+  if (expectedComparable && userComparable) {
+    if (expectedComparable === userComparable) return 100
+    if (compactComparableAnswerText(targetText) === compactComparableAnswerText(userText)) return 100
+  }
+
   const expectedTokens = [...new Set(answerTokens(targetText))]
   const userTokens = [...new Set(answerTokens(userText))]
   const expectedNumbers = [...new Set(extractNumbers(targetText))]
@@ -935,6 +955,8 @@ function semanticScore(expectedText, userText, questionText = '') {
   const numberScore = expectedNumbers.length
     ? expectedNumbers.filter(number => numberMatches(number, userNumbers)).length / expectedNumbers.length
     : conceptScore
+  if (expectedTokens.length <= 4 && expectedNumbers.length > 0 && conceptScore === 1 && userCoverage === 1 && numberScore === 1) return 100
+
   let score = ((conceptScore * 0.55) + (userCoverage * 0.25) + (numberScore * 0.20)) * 100
   if (conceptScore >= 0.72 && userCoverage >= 0.72 && numberScore >= 0.75) score = Math.max(score, 82)
   if (userTokens.length >= 3 && userCoverage >= 0.8 && numberScore >= 0.75) score = Math.max(score, 85)
@@ -1543,30 +1565,15 @@ export default function App() {
   )
 
   useEffect(() => {
-  if (!ready || !logged || !user) return
+    if (!ready) return
 
-  try {
-    localStorage.setItem('mq_cards', JSON.stringify(cards))
-  } catch (err) {
-    console.warn('Nao foi possivel salvar cards no navegador.', err)
-    setSyncStatus('Deck grande demais para salvar neste navegador. Tentando salvar na nuvem...')
-  }
-
-  const saveCards = async () => {
-    setSyncStatus('Salvando progresso...')
-    const { error } = await supabase
-      .from('profiles')
-      .upsert({
-        id: user.id,
-        email: user.email,
-        cards: cards
-      })
-
-    setSyncStatus(error ? `Erro ao salvar cards: ${error.message}` : 'Progresso salvo.')
-  }
-
-  saveCards()
-}, [cards, ready, logged, user])
+    try {
+      localStorage.setItem('mq_cards', JSON.stringify(cards))
+    } catch (err) {
+      console.warn('Nao foi possivel salvar cards no navegador.', err)
+      setSyncStatus('Deck grande demais para salvar neste navegador. Tentando salvar na nuvem...')
+    }
+  }, [cards, ready])
 
   useEffect(() => {
     if (!ready) return
@@ -1578,30 +1585,35 @@ export default function App() {
   }, [config, ready])
 
   useEffect(() => {
-  if (!ready || !logged || !user) return
+    if (!ready) return
 
-  try {
-    localStorage.setItem('mq_stats', JSON.stringify(stats))
-  } catch (err) {
-    console.warn('Nao foi possivel salvar estatisticas no navegador.', err)
-    setSyncStatus('Estatisticas grandes demais para salvar neste navegador. Tentando salvar na nuvem...')
-  }
+    try {
+      localStorage.setItem('mq_stats', JSON.stringify(stats))
+    } catch (err) {
+      console.warn('Nao foi possivel salvar estatisticas no navegador.', err)
+      setSyncStatus('Estatisticas grandes demais para salvar neste navegador. Tentando salvar na nuvem...')
+    }
+  }, [stats, ready])
 
-  const saveStats = async () => {
-    setSyncStatus('Salvando progresso...')
-    const { error } = await supabase
-      .from('profiles')
-      .upsert({
-        id: user.id,
-        email: user.email,
-        stats: stats
-      })
+  useEffect(() => {
+    if (!ready || !logged || !user) return
 
-    setSyncStatus(error ? `Erro ao salvar estatisticas: ${error.message}` : 'Progresso salvo.')
-  }
+    const saveTimer = window.setTimeout(async () => {
+      setSyncStatus('Salvando progresso...')
+      const { error } = await supabase
+        .from('profiles')
+        .upsert({
+          id: user.id,
+          email: user.email,
+          cards,
+          stats
+        })
 
-  saveStats()
-}, [stats, ready, logged, user])
+      setSyncStatus(error ? `Erro ao salvar progresso: ${error.message}` : 'Progresso salvo.')
+    }, 1200)
+
+    return () => window.clearTimeout(saveTimer)
+  }, [cards, stats, ready, logged, user])
 
   useEffect(() => {
     if (currentCardId) {
