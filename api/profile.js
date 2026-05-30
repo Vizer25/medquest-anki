@@ -47,6 +47,58 @@ function authHeaders(authorization) {
   }
 }
 
+async function supabaseJson(path, authorization, options = {}) {
+  const response = await fetch(`${SUPABASE_URL}${path}`, {
+    ...options,
+    headers: {
+      ...authHeaders(authorization),
+      ...(options.headers || {})
+    }
+  })
+  const text = await response.text()
+  return {
+    ok: response.ok,
+    status: response.status,
+    data: parseMaybeJson(text, { ok: response.ok })
+  }
+}
+
+async function loadProfileStats(userId, authorization) {
+  const result = await supabaseJson(
+    `/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=stats,email`,
+    authorization
+  )
+  if (!result.ok) return { stats: null, email: null }
+  const row = Array.isArray(result.data) ? result.data[0] : result.data
+  return {
+    stats: row?.stats && typeof row.stats === 'object' ? row.stats : null,
+    email: row?.email || null
+  }
+}
+
+async function loadGranularCards(userId, authorization) {
+  const pageSize = 1000
+  const cards = []
+
+  for (let offset = 0; offset < 10000; offset += pageSize) {
+    const result = await supabaseJson(
+      `/rest/v1/mq_cards?user_id=eq.${encodeURIComponent(userId)}&deleted=eq.false&select=payload&order=updated_at.asc`,
+      authorization,
+      { headers: { Range: `${offset}-${offset + pageSize - 1}` } }
+    )
+
+    if (!result.ok) {
+      return { ok: false, cards: [], detail: result.data }
+    }
+
+    const rows = Array.isArray(result.data) ? result.data : []
+    cards.push(...rows.map(row => row?.payload).filter(Boolean))
+    if (rows.length < pageSize) break
+  }
+
+  return { ok: true, cards }
+}
+
 export default async function handler(req, res) {
   try {
     const auth = await authenticatedUser(req)
@@ -62,21 +114,29 @@ export default async function handler(req, res) {
         return
       }
 
-      const response = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(id)}&select=cards,stats`, {
-        headers: authHeaders(auth.authorization)
+      const [profile, granular] = await Promise.all([
+        loadProfileStats(id, auth.authorization),
+        loadGranularCards(id, auth.authorization)
+      ])
+
+      res.status(200).json({
+        cards: granular.ok ? granular.cards : [],
+        stats: profile.stats,
+        granularReady: granular.ok,
+        granularDetail: granular.ok ? null : granular.detail
       })
-      const text = await response.text()
-      const data = parseMaybeJson(text, [])
-      res.status(response.status).json(Array.isArray(data) ? data[0] || null : data)
       return
     }
 
     if (req.method === 'POST') {
-      const { id, email, cards, stats } = req.body || {}
+      const { id, email, stats } = req.body || {}
       if (id !== auth.user.id) {
         res.status(403).json({ message: 'Acesso negado.' })
         return
       }
+
+      const profilePayload = { id, email }
+      if (stats && typeof stats === 'object') profilePayload.stats = stats
 
       const response = await fetch(`${SUPABASE_URL}/rest/v1/profiles?on_conflict=id`, {
         method: 'POST',
@@ -84,7 +144,7 @@ export default async function handler(req, res) {
           ...authHeaders(auth.authorization),
           Prefer: 'resolution=merge-duplicates,return=minimal'
         },
-        body: JSON.stringify({ id, email, cards, stats })
+        body: JSON.stringify(profilePayload)
       })
       const text = await response.text()
       res.status(response.status).json(parseMaybeJson(text, { ok: response.ok }))

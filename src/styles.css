@@ -354,6 +354,28 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .stage-filter .stage-1.active{color:#b54708;background:#fffaeb}
 .stage-filter .stage-2.active{color:#2f5bea;background:#eef4ff}
 .stage-filter .stage-3.active{color:#067647;background:#ecfdf3}
+.library-sort{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:0 0 12px;
+}
+.library-sort button{
+  min-height:36px;
+  padding:8px 12px;
+  border-radius:10px;
+  border:1px solid #d0d5dd;
+  background:#fff;
+  color:#344054;
+  font-size:14px;
+  font-weight:900;
+  box-shadow:none;
+}
+.library-sort button.active{
+  background:#eef4ff;
+  border-color:#84adff;
+  color:#2f5bea;
+}
 @media(max-width:900px){
   .stage-filter{grid-template-columns:repeat(2,minmax(0,1fr))}
 }

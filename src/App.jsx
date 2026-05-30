@@ -9,6 +9,7 @@ import {
   Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle, Scissors
 } from 'lucide-react'
 const REMEMBER_LOGIN_KEY = 'mq_remember_login'
+const CURRENT_CARD_KEY = 'mq_current_card_id'
 const authStorage = {
   getItem(key) {
     try {
@@ -62,6 +63,14 @@ const REVIEW_STAGES = [
   { level: 3, label: '30 dias', delay: 30 * DAY }
 ]
 const REVIEW_STAGE_NAMES = ['10 minutos', '3 dias', '10 dias', '30 dias']
+
+function getStoredCurrentCardId() {
+  try {
+    return localStorage.getItem(CURRENT_CARD_KEY) || ''
+  } catch {
+    return ''
+  }
+}
 
 function clearStoredAuthSession() {
   try {
@@ -1095,6 +1104,14 @@ function importCardKey(card) {
   return card.importKey || card.originalImportKey || stableCardKey(card)
 }
 
+function cardAddedScore(card) {
+  const dateValue = card.importedAt || card.createdAt || card.manualEditedAt || card.sourceUpdatedAt || ''
+  const dateScore = dateValue ? new Date(dateValue).getTime() : 0
+  if (Number.isFinite(dateScore) && dateScore > 0) return dateScore
+  const idMatch = String(card.id || '').match(/\d+/g)
+  return idMatch?.length ? Number(idMatch.join('').slice(0, 15)) || 0 : 0
+}
+
 function imageTags(html) {
   return String(html || '').match(/<img\b[^>]*>/gi) || []
 }
@@ -1129,11 +1146,13 @@ function mergeImportedCards(oldCards, importedCards) {
   let updated = 0
   let preservedEdited = 0
   let ignoredExisting = 0
+  const createdCards = []
+  const importedAt = new Date().toISOString()
 
   const merged = [...oldCards]
 
   importedCards.forEach(newCard => {
-    const nextCard = { ...newCard, importKey: importCardKey(newCard), originalImportKey: importCardKey(newCard) }
+    const nextCard = { ...newCard, importKey: importCardKey(newCard), originalImportKey: importCardKey(newCard), importedAt }
     const idKey = String(newCard.id)
     const contentKey = importCardKey(nextCard)
     const existing = oldById.get(idKey) || oldByKey.get(contentKey)
@@ -1188,11 +1207,12 @@ function mergeImportedCards(oldCards, importedCards) {
       }
     } else {
       merged.push(nextCard)
+      createdCards.push(nextCard)
       added += 1
     }
   })
 
-  return { merged, added, updated, preservedEdited, ignoredExisting }
+  return { merged, added, updated, preservedEdited, ignoredExisting, createdCards }
 }
 
 
@@ -1328,7 +1348,7 @@ export default function App() {
   const [config, setConfig] = useState(DEFAULT_CONFIG)
   const [stats, setStats] = useState(DEFAULT_STATS)
   const [index, setIndex] = useState(0)
-  const [currentCardId, setCurrentCardId] = useState('')
+  const [currentCardId, setCurrentCardId] = useState(() => getStoredCurrentCardId())
   const [answer, setAnswer] = useState('')
   const [feedback, setFeedback] = useState(null)
   const [pendingGrade, setPendingGrade] = useState(null)
@@ -1343,6 +1363,7 @@ export default function App() {
   const [importLog, setImportLog] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [cardStageFilter, setCardStageFilter] = useState('all')
+  const [librarySortMode, setLibrarySortMode] = useState('difficulty')
   const [studyTag, setStudyTag] = useState('')
   const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
@@ -1378,18 +1399,19 @@ export default function App() {
 
   async function saveProfileThroughProxy(authedUser, token, nextCards, nextStats) {
     if (!token) throw new Error('Sessao sem token.')
+    const payload = {
+      id: authedUser.id,
+      email: authedUser.email
+    }
+    if (nextStats && typeof nextStats === 'object') payload.stats = nextStats
+
     const response = await fetch('/api/profile', {
       method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,
         'content-type': 'application/json'
       },
-      body: JSON.stringify({
-        id: authedUser.id,
-        email: authedUser.email,
-        cards: nextCards,
-        stats: nextStats
-      })
+      body: JSON.stringify(payload)
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.message || 'Falha ao salvar progresso.')
@@ -1415,6 +1437,53 @@ export default function App() {
     return data
   }
 
+  async function syncCardsBatchThroughProxy(cardBatch) {
+    if (!user || !sessionToken || !cardBatch?.length) return null
+    const response = await fetch('/api/sync-cards', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        userId: user.id,
+        cards: cardBatch
+      })
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || 'Falha ao sincronizar cards.')
+    if (data?.ok === false) throw new Error(data.message || 'Falha ao sincronizar cards.')
+    return data
+  }
+
+  function syncOneCard(card, event = null) {
+    if (!card) return
+    syncReviewThroughProxy(card, event)
+      .then(data => {
+        if (data?.fallback) setSyncStatus('Banco granular ainda nao esta pronto. Progresso mantido neste navegador.')
+      })
+      .catch(err => {
+        console.warn('Sincronizacao granular adiada.', err)
+        setSyncStatus('Supabase instavel. Progresso mantido neste navegador e tentarei de novo depois.')
+      })
+  }
+
+  async function syncCardsInChunks(cardList, label = 'cards') {
+    if (!user || !sessionToken || !Array.isArray(cardList) || !cardList.length) return
+    const cardsToSync = cardList.filter(Boolean)
+    const chunkSize = 100
+    try {
+      for (let i = 0; i < cardsToSync.length; i += chunkSize) {
+        await syncCardsBatchThroughProxy(cardsToSync.slice(i, i + chunkSize))
+        await new Promise(resolve => window.setTimeout(resolve, 150))
+      }
+      setSyncStatus(`${label} sincronizados em lotes pequenos.`)
+    } catch (err) {
+      console.warn('Sincronizacao em lote adiada.', err)
+      setSyncStatus('Supabase instavel. Importacao ficou salva neste navegador; tente sincronizar depois.')
+    }
+  }
+
   async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats, token = sessionToken) {
     if (!authedUser) return
 
@@ -1426,7 +1495,7 @@ export default function App() {
     } else {
       const result = await supabase
         .from('profiles')
-        .select('cards, stats')
+        .select('stats')
         .eq('id', authedUser.id)
         .maybeSingle()
 
@@ -1437,25 +1506,30 @@ export default function App() {
     const hasCloudCards = Array.isArray(data?.cards) && data.cards.length > 0
     const hasCloudStats = data?.stats && typeof data.stats === 'object'
 
+    if (data?.granularReady === false) {
+      setSyncStatus('Banco granular ainda nao esta pronto. Usando progresso local.')
+    }
+
     if (hasCloudCards) setCards(data.cards)
     if (hasCloudStats) setStats(safeStats(data.stats))
 
     if (!hasCloudCards && !hasCloudStats) {
       if (token) {
-        await saveProfileThroughProxy(authedUser, token, seedCards, seedStats)
+        await saveProfileThroughProxy(authedUser, token, undefined, seedStats)
       } else {
         await supabase
           .from('profiles')
           .upsert({
             id: authedUser.id,
             email: authedUser.email,
-            cards: seedCards,
             stats: seedStats
           })
       }
-      setSyncStatus('Progresso local enviado para sua conta.')
+      setSyncStatus('Conta pronta. Cards serao salvos de forma granular ao estudar.')
       return
     }
+
+    if (data?.granularReady === false) return
 
     setSyncStatus('Progresso sincronizado.')
   }
@@ -1468,17 +1542,20 @@ export default function App() {
       let nextConfig = DEFAULT_CONFIG
       let nextStats = DEFAULT_STATS
       let nextLastAnswered = null
+      let nextCurrentCardId = getStoredCurrentCardId()
 
       try {
         const savedCards = localStorage.getItem('mq_cards')
         const savedConfig = localStorage.getItem('mq_config')
         const savedStats = localStorage.getItem('mq_stats')
         const savedLastAnswered = localStorage.getItem('mq_last_answered')
+        const savedCurrentCardId = localStorage.getItem(CURRENT_CARD_KEY)
 
         if (savedCards) nextCards = JSON.parse(savedCards)
         if (savedConfig) nextConfig = { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) }
         if (savedStats) nextStats = safeStats(JSON.parse(savedStats))
         if (savedLastAnswered) nextLastAnswered = savedLastAnswered
+        if (savedCurrentCardId) nextCurrentCardId = savedCurrentCardId
       } catch {
         localStorage.removeItem('mq_stats')
       }
@@ -1488,6 +1565,7 @@ export default function App() {
         setConfig(nextConfig)
         setStats(nextStats)
         if (nextLastAnswered) setLastAnsweredId(nextLastAnswered)
+        if (nextCurrentCardId) setCurrentCardId(nextCurrentCardId)
         setReady(true)
       }
 
@@ -1504,6 +1582,7 @@ export default function App() {
           setConfig(nextConfig)
           setStats(nextStats)
           if (nextLastAnswered) setLastAnsweredId(nextLastAnswered)
+          if (nextCurrentCardId) setCurrentCardId(nextCurrentCardId)
         }
 
         if (sessionUser) {
@@ -1660,7 +1739,10 @@ export default function App() {
     const matchesSearch = !q || normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
     const matchesStage = cardStageFilter === 'all' || reviewCategoryKey(c) === cardStageFilter
     return matchesSearch && matchesStage
-  }).sort((a, b) => sortCardsByDifficulty(a, b, reviewMetricsByCard))
+  }).sort((a, b) => {
+    if (librarySortMode === 'recent') return cardAddedScore(b) - cardAddedScore(a)
+    return sortCardsByDifficulty(a, b, reviewMetricsByCard)
+  })
   const statsPanel = (
     <>
       <section className="stats stats-summary">
@@ -1717,35 +1799,29 @@ export default function App() {
   }, [stats, ready])
 
   useEffect(() => {
-    if (!ready || !logged || !user) return
+    if (!ready || !logged || !user || !sessionToken) return
 
     const saveTimer = window.setTimeout(async () => {
-      setSyncStatus('Salvando progresso...')
       try {
-        if (sessionToken) {
-          await saveProfileThroughProxy(user, sessionToken, cards, stats)
-          setSyncStatus('Progresso salvo.')
-          return
-        }
-
-        const { error } = await supabase
-          .from('profiles')
-          .upsert({
-            id: user.id,
-            email: user.email,
-            cards,
-            stats
-          })
-
-        if (error) throw error
-        setSyncStatus('Progresso salvo.')
+        await saveProfileThroughProxy(user, sessionToken, undefined, stats)
       } catch (err) {
-        setSyncStatus(`Erro ao salvar progresso: ${err.message || 'falha de conexao'}`)
+        console.warn('Nao foi possivel salvar estatisticas agora.', err)
+        setSyncStatus('Supabase instavel. Estatisticas ficaram salvas neste navegador.')
       }
-    }, 1200)
+    }, 12000)
 
     return () => window.clearTimeout(saveTimer)
-  }, [cards, stats, ready, logged, user, sessionToken])
+  }, [stats, ready, logged, user, sessionToken])
+
+  useEffect(() => {
+    if (!ready) return
+    try {
+      if (currentCardId) localStorage.setItem(CURRENT_CARD_KEY, currentCardId)
+      else localStorage.removeItem(CURRENT_CARD_KEY)
+    } catch {
+      // The selected card can be recovered from the queue if storage is unavailable.
+    }
+  }, [currentCardId, ready])
 
   useEffect(() => {
     if (currentCardId) {
@@ -2038,7 +2114,7 @@ export default function App() {
 
     setCards(updatedCards)
     if (syncedCard) {
-      syncReviewThroughProxy(syncedCard, {
+      syncOneCard(syncedCard, {
         cardId: syncedCard.id,
         grade: pendingGrade.grade,
         percent: pendingGrade.percent ?? feedback?.percent ?? 0,
@@ -2047,7 +2123,7 @@ export default function App() {
         answeredAt: pendingGrade.answeredAt || new Date().toISOString(),
         manuallyCorrected: feedback?.manuallyCorrected || false,
         isNewCard: pendingGrade.isNewCard || false
-      }).catch(err => console.warn('Sincronizacao granular adiada.', err))
+      })
     }
     setAnswer('')
     setFeedback(null)
@@ -2107,10 +2183,12 @@ export default function App() {
       ease: 2500,
       tags: newTags.trim() || 'manual',
       manualEditedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
       palavras: normalize(built.resposta || newBack).split(' ').filter(w => w.length > 3).slice(0, 12)
     }
 
     setCards(prev => [...prev, card])
+    syncOneCard(card)
     setNewFront('')
     setNewBack('')
     setNewTags('')
@@ -2335,15 +2413,21 @@ export default function App() {
     if (!editingCardId) return
     const pergunta = stripHtml(editFront)
     const resposta = stripHtml(editBack)
-    setCards(prev => prev.map(c => c.id === editingCardId ? {
-      ...c,
-      pergunta,
-      resposta,
-      htmlFront: editFront,
-      htmlBack: editBack,
-      manualEditedAt: new Date().toISOString(),
-      palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
-    } : c))
+    let updatedCard = null
+    setCards(prev => prev.map(c => {
+      if (c.id !== editingCardId) return c
+      updatedCard = {
+        ...c,
+        pergunta,
+        resposta,
+        htmlFront: editFront,
+        htmlBack: editBack,
+        manualEditedAt: new Date().toISOString(),
+        palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
+      }
+      return updatedCard
+    }))
+    if (updatedCard) syncOneCard(updatedCard)
     if (feedback?.cardId === editingCardId) {
       setFeedback(prev => prev ? {
         ...prev,
@@ -2380,17 +2464,20 @@ export default function App() {
 
   function toggleSuspendCard(cardId) {
     let suspended = false
+    let updatedCard = null
     setCards(prev => prev.map(card => {
       if (card.id !== cardId) return card
       suspended = !card.suspended
-      return {
+      updatedCard = {
         ...card,
         suspended,
         suspendedAt: suspended ? new Date().toISOString() : null,
         dueAt: suspended ? card.dueAt : Date.now(),
         manualEditedAt: new Date().toISOString()
       }
+      return updatedCard
     }))
+    if (updatedCard) syncOneCard(updatedCard)
     setImportLog(suspended ? 'Card suspenso. Ele nao aparecera nas revisoes normais.' : 'Card reativado. Ele voltou para as revisoes.')
   }
 
@@ -2399,12 +2486,18 @@ export default function App() {
     if (!card) return
     const ok = window.confirm('Excluir este flashcard da biblioteca? Ele nao aparecera nas revisoes e nao voltara em novas importacoes.')
     if (!ok) return
-    setCards(prev => prev.map(c => c.id === cardId ? {
-      ...c,
-      deleted: true,
-      deletedAt: new Date().toISOString(),
-      manualEditedAt: new Date().toISOString()
-    } : c))
+    let updatedCard = null
+    setCards(prev => prev.map(c => {
+      if (c.id !== cardId) return c
+      updatedCard = {
+        ...c,
+        deleted: true,
+        deletedAt: new Date().toISOString(),
+        manualEditedAt: new Date().toISOString()
+      }
+      return updatedCard
+    }))
+    if (updatedCard) syncOneCard(updatedCard)
     if (lastAnsweredId === cardId) setLastAnsweredId(null)
     setFocusedCardIds(prev => prev.filter(id => id !== cardId))
     setFeedback(prev => prev?.cardId === cardId ? null : prev)
@@ -2479,15 +2572,21 @@ export default function App() {
       }
     })
 
+    let updatedOriginal = null
     setCards(prev => [
-      ...prev.map(card => card.id === sourceCard.id && splitSuspendOriginal ? {
-        ...card,
-        suspended: true,
-        suspendedAt: new Date().toISOString(),
-        manualEditedAt: new Date().toISOString()
-      } : card),
+      ...prev.map(card => {
+        if (card.id !== sourceCard.id || !splitSuspendOriginal) return card
+        updatedOriginal = {
+          ...card,
+          suspended: true,
+          suspendedAt: new Date().toISOString(),
+          manualEditedAt: new Date().toISOString()
+        }
+        return updatedOriginal
+      }),
       ...created
     ])
+    syncCardsInChunks(updatedOriginal ? [updatedOriginal, ...created] : created, 'Cards quebrados')
     setSplitCardId(null)
     setSplitParts([])
     setImportLog(`${created.length} cards menores criados${splitSuspendOriginal ? ' e card original suspenso' : ''}.`)
@@ -2549,10 +2648,10 @@ export default function App() {
         setCards(prev => {
           const result = mergeImportedCards(prev, imported)
           setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
+          syncCardsInChunks(result.createdCards, 'Cards novos importados')
           return result.merged
         })
         setIndex(0)
-        setCurrentCardId('')
       } else {
         setImportLog('Nao consegui ler o CSV. Use: pergunta;resposta;imagem(opcional)')
       }
@@ -2619,10 +2718,10 @@ export default function App() {
       setCards(prev => {
         const result = mergeImportedCards(prev, imported)
         setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
+        syncCardsInChunks(result.createdCards, 'Cards novos importados')
         return result.merged
       })
       setIndex(0)
-      setCurrentCardId('')
     } catch (err) {
       console.error(err)
       setImportLog(`Erro ao importar APKG: ${err.message || String(err)}`)
@@ -2675,7 +2774,7 @@ export default function App() {
       )}
 
       <nav className="tabs">
-        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setIndex(0); setCurrentCardId(''); setTab('study') }}><Brain size={18}/> Estudar</button>
+        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setIndex(0); setTab('study') }}><Brain size={18}/> Estudar</button>
         <button className={tab==='cards'?'active':''} onClick={()=>setTab('cards')}><Eye size={18}/> Ver flashcards</button>
         <button className={tab==='import'?'active':''} onClick={()=>setTab('import')}><Upload size={18}/> Importar</button>
         <button className={tab==='create'?'active':''} onClick={()=>setTab('create')}><Plus size={18}/> Criar card</button>
@@ -2818,6 +2917,22 @@ export default function App() {
                 <b>{reviewCategoryCounts[option.key] || 0}</b>
               </button>
             ))}
+          </div>
+          <div className="library-sort">
+            <button
+              type="button"
+              className={librarySortMode === 'difficulty' ? 'active' : ''}
+              onClick={() => setLibrarySortMode('difficulty')}
+            >
+              Mais repetidos
+            </button>
+            <button
+              type="button"
+              className={librarySortMode === 'recent' ? 'active' : ''}
+              onClick={() => setLibrarySortMode('recent')}
+            >
+              Ultimos adicionados
+            </button>
           </div>
           <div className="tag-cloud">
             {allTags.map(tag => (
