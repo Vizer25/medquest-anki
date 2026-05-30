@@ -63,16 +63,18 @@ async function supabaseJson(path, authorization, options = {}) {
   }
 }
 
-async function loadProfileStats(userId, authorization) {
+async function loadProfileData(userId, authorization) {
   const result = await supabaseJson(
-    `/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=stats,email`,
+    `/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=stats,email,cards`,
     authorization
   )
-  if (!result.ok) return { stats: null, email: null }
+  if (!result.ok) return { stats: null, email: null, cards: [] }
   const row = Array.isArray(result.data) ? result.data[0] : result.data
+  const legacyCards = Array.isArray(row?.cards) ? row.cards.filter(Boolean) : []
   return {
     stats: row?.stats && typeof row.stats === 'object' ? row.stats : null,
-    email: row?.email || null
+    email: row?.email || null,
+    cards: legacyCards
   }
 }
 
@@ -115,15 +117,21 @@ export default async function handler(req, res) {
       }
 
       const [profile, granular] = await Promise.all([
-        loadProfileStats(id, auth.authorization),
+        loadProfileData(id, auth.authorization),
         loadGranularCards(id, auth.authorization)
       ])
+      const legacyCards = Array.isArray(profile.cards) ? profile.cards : []
+      const granularCards = granular.ok ? granular.cards : []
+      const useLegacyBackup = legacyCards.length > granularCards.length
 
       res.status(200).json({
-        cards: granular.ok ? granular.cards : [],
+        cards: useLegacyBackup ? legacyCards : granularCards,
         stats: profile.stats,
         granularReady: granular.ok,
-        granularDetail: granular.ok ? null : granular.detail
+        granularDetail: granular.ok ? null : granular.detail,
+        migrationNeeded: granular.ok && useLegacyBackup,
+        legacyCardCount: legacyCards.length,
+        granularCardCount: granularCards.length
       })
       return
     }

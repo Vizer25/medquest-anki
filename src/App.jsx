@@ -1513,6 +1513,12 @@ export default function App() {
     if (hasCloudCards) setCards(data.cards)
     if (hasCloudStats) setStats(safeStats(data.stats))
 
+    if (data?.migrationNeeded && hasCloudCards) {
+      setSyncStatus(`Recuperando backup antigo: ${data.legacyCardCount || data.cards.length} cards encontrados. Sincronizando em lotes...`)
+      syncCardsInChunks(data.cards, 'Backup antigo recuperado')
+      return
+    }
+
     if (!hasCloudCards && !hasCloudStats) {
       if (token) {
         await saveProfileThroughProxy(authedUser, token, undefined, seedStats)
