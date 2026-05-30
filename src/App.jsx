@@ -38,6 +38,9 @@ const authStorage = {
     }
   }
 }
+
+const authLock = async (_name, _acquireTimeout, fn) => fn()
+
 const supabase = createClient(
   'https://lgmfmdpzmqunouysuwjp.supabase.co',
   'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7',
@@ -45,7 +48,8 @@ const supabase = createClient(
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      storage: authStorage
+      storage: authStorage,
+      lock: authLock
     }
   }
 )
@@ -1124,6 +1128,7 @@ function mergeImportedCards(oldCards, importedCards) {
   let added = 0
   let updated = 0
   let preservedEdited = 0
+  let ignoredExisting = 0
 
   const merged = [...oldCards]
 
@@ -1134,6 +1139,12 @@ function mergeImportedCards(oldCards, importedCards) {
     const existing = oldById.get(idKey) || oldByKey.get(contentKey)
 
     if (existing) {
+      ignoredExisting += 1
+      if (existing.manualEditedAt) preservedEdited += 1
+      return
+    }
+
+    if (false) {
       const index = merged.findIndex(c => c.id === existing.id)
       if (index >= 0) {
         if (existing.manualEditedAt) {
@@ -1181,7 +1192,7 @@ function mergeImportedCards(oldCards, importedCards) {
     }
   })
 
-  return { merged, added, updated, preservedEdited }
+  return { merged, added, updated, preservedEdited, ignoredExisting }
 }
 
 
@@ -1742,7 +1753,7 @@ export default function App() {
           email,
           password: senha
         }),
-        10000,
+        30000,
         'Tempo limite ao fazer login'
       )
 
@@ -1758,7 +1769,7 @@ export default function App() {
 
       withTimeout(
         loadCloudProgress(data.user),
-        10000,
+        15000,
         'Tempo limite ao carregar progresso'
       ).catch(err => {
         console.error(err)
@@ -2416,7 +2427,7 @@ export default function App() {
       if (imported.length) {
         setCards(prev => {
           const result = mergeImportedCards(prev, imported)
-          setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
+          setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
           return result.merged
         })
         setIndex(0)
@@ -2486,7 +2497,7 @@ export default function App() {
 
       setCards(prev => {
         const result = mergeImportedCards(prev, imported)
-        setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.updated} cards ja existentes atualizados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
+        setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
         return result.merged
       })
       setIndex(0)
