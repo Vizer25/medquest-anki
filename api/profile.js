@@ -1,11 +1,25 @@
 const SUPABASE_URL = 'https://lgmfmdpzmqunouysuwjp.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7'
 
+function parseMaybeJson(text, fallback) {
+  if (!text) return fallback
+  try {
+    return JSON.parse(text)
+  } catch {
+    return {
+      message: text.includes('<!DOCTYPE')
+        ? 'O Supabase respondeu uma pagina de erro em vez de JSON. Tente novamente em alguns segundos.'
+        : text.slice(0, 240)
+    }
+  }
+}
+
 function authHeaders(req) {
   const authorization = req.headers.authorization || ''
   return {
     apikey: SUPABASE_ANON_KEY,
-    authorization,
+    authorization: authorization || `Bearer ${SUPABASE_ANON_KEY}`,
+    accept: 'application/json',
     'content-type': 'application/json'
   }
 }
@@ -23,7 +37,7 @@ export default async function handler(req, res) {
         headers: authHeaders(req)
       })
       const text = await response.text()
-      const data = text ? JSON.parse(text) : []
+      const data = parseMaybeJson(text, [])
       res.status(response.status).json(Array.isArray(data) ? data[0] || null : data)
       return
     }
@@ -44,7 +58,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({ id, email, cards, stats })
       })
       const text = await response.text()
-      res.status(response.status).json(text ? JSON.parse(text) : { ok: response.ok })
+      res.status(response.status).json(parseMaybeJson(text, { ok: response.ok }))
       return
     }
 

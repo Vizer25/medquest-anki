@@ -1,6 +1,19 @@
 const SUPABASE_URL = 'https://lgmfmdpzmqunouysuwjp.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_q0Kj-XQCbt89nVlQPdsG3A_pJPvVP-7'
 
+function parseMaybeJson(text) {
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    return {
+      message: text.includes('<!DOCTYPE')
+        ? 'O Supabase respondeu uma pagina de erro em vez de JSON. Tente novamente em alguns segundos.'
+        : text.slice(0, 240)
+    }
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ message: 'Method not allowed' })
@@ -18,13 +31,15 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         apikey: SUPABASE_ANON_KEY,
+        authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        accept: 'application/json',
         'content-type': 'application/json'
       },
       body: JSON.stringify({ email, password })
     })
 
     const text = await response.text()
-    const data = text ? JSON.parse(text) : {}
+    const data = parseMaybeJson(text)
     res.status(response.status).json(data)
   } catch (err) {
     res.status(500).json({ message: err.message || 'Erro ao conectar ao Supabase.' })
