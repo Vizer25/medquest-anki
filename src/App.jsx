@@ -9,6 +9,7 @@ import {
   Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle, Scissors
 } from 'lucide-react'
 const REMEMBER_LOGIN_KEY = 'mq_remember_login'
+const OFFLINE_SESSION_KEY = 'mq_offline_session'
 const authStorage = {
   getItem(key) {
     try {
@@ -1312,6 +1313,7 @@ export default function App() {
   const [logged, setLogged] = useState(false)
   const [user, setUser] = useState(null)
   const [sessionToken, setSessionToken] = useState('')
+  const [offlineMode, setOfflineMode] = useState(false)
   const [login, setLogin] = useState('')
   const [senha, setSenha] = useState('')
   const [rememberLogin, setRememberLogin] = useState(() => {
@@ -1396,6 +1398,25 @@ export default function App() {
     return data
   }
 
+  async function syncReviewThroughProxy(card, event) {
+    if (!user || !sessionToken || offlineMode || !card?.id) return
+    const response = await fetch('/api/sync-review', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${sessionToken}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        userId: user.id,
+        card,
+        event
+      })
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || 'Falha ao sincronizar revisao.')
+    return data
+  }
+
   async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats, token = sessionToken) {
     if (!authedUser) return
 
@@ -1473,6 +1494,21 @@ export default function App() {
       }
 
       try {
+        if (sessionStorage.getItem(OFFLINE_SESSION_KEY) === 'true') {
+          if (active) {
+            setOfflineMode(true)
+            setUser(null)
+            setSessionToken('')
+            setLogged(true)
+            setSyncStatus('Modo local. Progresso salvo neste navegador.')
+          }
+          return
+        }
+      } catch {
+        // If sessionStorage is unavailable, the login screen still works normally.
+      }
+
+      try {
         const { data } = await withTimeout(
           supabase.auth.getSession(),
           5000,
@@ -1500,6 +1536,7 @@ export default function App() {
           if (active) {
             setUser(sessionUser)
             setSessionToken(token)
+            setOfflineMode(false)
             setLogged(true)
           }
         }
@@ -1790,10 +1827,27 @@ export default function App() {
 
   function logout() {
     localStorage.removeItem('mq_logged')
+    sessionStorage.removeItem(OFFLINE_SESSION_KEY)
+    setOfflineMode(false)
     setLogged(false)
     setFeedback(null)
     setSiteSeconds(0)
     setCardSeconds(0)
+  }
+
+  function enterOfflineMode() {
+    try {
+      sessionStorage.setItem(OFFLINE_SESSION_KEY, 'true')
+    } catch {
+      // Local mode still works; it just will not survive a refresh if storage is blocked.
+    }
+    setUser(null)
+    setSessionToken('')
+    setOfflineMode(true)
+    setLogged(true)
+    setSenha('')
+    setFeedback(null)
+    setSyncStatus('Modo local. Progresso salvo neste navegador.')
   }
 
   async function cloudEnter() {
@@ -1843,6 +1897,7 @@ export default function App() {
       const token = data.session?.access_token || data.access_token || ''
       setUser(data.user)
       setSessionToken(token)
+      setOfflineMode(false)
       setLogged(true)
       setSenha('')
       setFeedback(null)
@@ -1864,11 +1919,16 @@ export default function App() {
   }
 
   async function cloudLogout() {
-    await supabase.auth.signOut()
+    if (!offlineMode && user) {
+      await supabase.auth.signOut().catch(err => console.warn('Nao foi possivel encerrar sessao remota.', err))
+    }
     clearStoredAuthSession()
+    sessionStorage.removeItem(OFFLINE_SESSION_KEY)
     localStorage.removeItem(REMEMBER_LOGIN_KEY)
     setRememberLogin(false)
     setUser(null)
+    setSessionToken('')
+    setOfflineMode(false)
     setLogged(false)
     setFeedback(null)
     setSyncStatus('')
@@ -1982,7 +2042,15 @@ export default function App() {
 
     setLastAnsweredId(current.id)
     localStorage.setItem('mq_last_answered', current.id)
-    setPendingGrade({ cardId: current.id, grade })
+    setPendingGrade({
+      cardId: current.id,
+      grade,
+      percent,
+      correct: isCorrect,
+      seconds: cardSeconds,
+      answeredAt: new Date().toISOString(),
+      isNewCard
+    })
     const nextSchedule = previewSchedule(current, grade)
     const scheduleLabel = nextSchedule.label
 
@@ -2002,6 +2070,7 @@ export default function App() {
     const updatedCards = pendingGrade
       ? cards.map(c => c.id === pendingGrade.cardId ? scheduleCard(c, pendingGrade.grade) : c)
       : cards
+    const syncedCard = pendingGrade ? updatedCards.find(c => c.id === pendingGrade.cardId) : null
 
     const focusedIds = new Set(focusedCardIds)
     let shouldClearFocus = false
@@ -2024,6 +2093,18 @@ export default function App() {
     }
 
     setCards(updatedCards)
+    if (syncedCard) {
+      syncReviewThroughProxy(syncedCard, {
+        cardId: syncedCard.id,
+        grade: pendingGrade.grade,
+        percent: pendingGrade.percent ?? feedback?.percent ?? 0,
+        correct: pendingGrade.correct ?? (pendingGrade.grade === 'good' || pendingGrade.grade === 'easy'),
+        seconds: pendingGrade.seconds ?? cardSeconds,
+        answeredAt: pendingGrade.answeredAt || new Date().toISOString(),
+        manuallyCorrected: feedback?.manuallyCorrected || false,
+        isNewCard: pendingGrade.isNewCard || false
+      }).catch(err => console.warn('Sincronizacao granular adiada.', err))
+    }
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
@@ -2161,13 +2242,21 @@ export default function App() {
     const correctedGrade = 'good'
 
     const nextSchedule = previewSchedule(current, correctedGrade)
-    setPendingGrade({ cardId: current.id, grade: correctedGrade })
-    setFeedback(prev => prev ? {
-      ...prev,
-      type: 'good',
+    setPendingGrade(prev => ({
+      ...(prev || {}),
+      cardId: current.id,
       grade: correctedGrade,
       percent: 80,
-      text: `Marcado manualmente como acerto. Resultado anterior: ${prev.percent}%.`,
+      correct: true,
+      answeredAt: prev?.answeredAt || new Date().toISOString()
+    }))
+    setFeedback(prev => prev ? {
+      ...prev,
+        type: 'good',
+        grade: correctedGrade,
+        percent: 80,
+        manuallyCorrected: true,
+        text: `Marcado manualmente como acerto. Resultado anterior: ${prev.percent}%.`,
       scheduleLabel: nextSchedule.label
     } : prev)
 
@@ -2217,12 +2306,20 @@ export default function App() {
     const correctedGrade = 'again'
     const nextSchedule = previewSchedule(current, correctedGrade)
 
-    setPendingGrade({ cardId: current.id, grade: correctedGrade })
+    setPendingGrade(prev => ({
+      ...(prev || {}),
+      cardId: current.id,
+      grade: correctedGrade,
+      percent: 0,
+      correct: false,
+      answeredAt: prev?.answeredAt || new Date().toISOString()
+    }))
     setFeedback(prev => prev ? {
       ...prev,
       type: 'bad',
       grade: correctedGrade,
       percent: 0,
+      manuallyCorrected: true,
       text: `Marcado manualmente como erro. Resultado anterior: ${prev.percent}%.`,
       scheduleLabel: nextSchedule.label
     } : prev)
@@ -2605,6 +2702,10 @@ export default function App() {
             <span>Manter conectado neste dispositivo privado</span>
           </label>
           <button onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
+          <button type="button" className="local-login-button" onClick={enterOfflineMode} disabled={authLoading}>
+            Usar sem sincronizar
+          </button>
+          <small className="local-login-note">Modo local para quando o Supabase estiver fora. Salva apenas neste navegador.</small>
           {feedback?.type === 'bad' && <div className="alert bad">{feedback.text}</div>}
           {feedback?.type === 'good' && <div className="alert good">{feedback.text}</div>}
         </section>
@@ -2620,7 +2721,7 @@ export default function App() {
         </div>
         <div className="profile">
           <div className="profile-copy">
-            <span>{user?.email}</span>
+            <span>{offlineMode ? 'Modo local' : user?.email}</span>
             {syncStatus && <small>{syncStatus}</small>}
           </div>
           <button onClick={cloudLogout}><LogOut size={20}/> Sair</button>
