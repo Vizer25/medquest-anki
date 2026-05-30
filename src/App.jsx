@@ -1824,13 +1824,22 @@ export default function App() {
   }, [currentCardId, ready])
 
   useEffect(() => {
+    if (answer.trim() || editing || feedback || pendingGrade) return
+
     if (currentCardId) {
-      const exists = activeCards.some(card => card.id === currentCardId && !card.deleted && !card.suspended)
-      if (!exists) setCurrentCardId(queuedCurrent?.id || '')
+      const locked = activeCards.find(card => card.id === currentCardId && !card.deleted && !card.suspended)
+      if (!locked) {
+        setCurrentCardId(queuedCurrent?.id || '')
+        return
+      }
+
+      if (!isCardDue(locked) && queuedCurrent?.id && queuedCurrent.id !== currentCardId) {
+        setCurrentCardId(queuedCurrent.id)
+      }
       return
     }
     if (queuedCurrent) setCurrentCardId(queuedCurrent.id)
-  }, [currentCardId, queuedCurrent?.id, activeCards])
+  }, [currentCardId, queuedCurrent?.id, activeCards, answer, editing, feedback, pendingGrade])
 
   useEffect(() => {
     if (!ready || !logged) return
@@ -2003,6 +2012,8 @@ export default function App() {
 
     const cardForAnswer = getCardView(current)
     const userText = answer
+    const existingHistory = safeStats(stats).history || []
+    const isNewCard = !hasReviewHistory(current) && !existingHistory.some(item => item.id === current.id)
     let percent = 0
 
     if (cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length) {
@@ -2019,7 +2030,6 @@ export default function App() {
     setStats(prevRaw => {
       const prev = safeStats(prevRaw)
       const dailyPatch = markDailyDone(prev, current.id)
-      const isNewCard = !hasReviewHistory(current) && !(prev.history || []).some(item => item.id === current.id)
       const newXp = Math.max(0, (prev.xp || 0) + xpDelta)
       const newStreak = isCorrect ? (prev.streak || 0) + 1 : 0
       const historyItem = {
@@ -2134,15 +2144,15 @@ export default function App() {
       ? sortDueQueue(freshDue)
       : buildStudyQueue(freshPool, seenCardIds, remainingNewToday > 0, Date.now(), reviewStreakForNewRatio)
 
-    if (sortedDue.length <= 1) {
+    const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
+
+    if (!alternatives.length) {
       setIndex(0)
-      setCurrentCardId(sortedDue[0]?.id || '')
+      setCurrentCardId('')
       return
     }
 
-    const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
-    const pool = alternatives.length ? alternatives : sortedDue
-    const next = pool[0]
+    const next = alternatives[0]
     setCurrentCardId(next?.id || '')
     setIndex(Math.max(0, sortedDue.findIndex(card => card.id === next.id)))
   }
