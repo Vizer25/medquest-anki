@@ -655,6 +655,15 @@ function compactComparableAnswerText(text) {
   return comparableAnswerText(text).replace(/\s+/g, '')
 }
 
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error(message)), ms)
+    })
+  ])
+}
+
 function editDistance(a, b) {
   if (a === b) return 0
   if (Math.abs(a.length - b.length) > 2) return 3
@@ -1383,8 +1392,20 @@ export default function App() {
         localStorage.removeItem('mq_stats')
       }
 
+      if (active) {
+        setCards(nextCards)
+        setConfig(nextConfig)
+        setStats(nextStats)
+        if (nextLastAnswered) setLastAnsweredId(nextLastAnswered)
+        setReady(true)
+      }
+
       try {
-        const { data } = await supabase.auth.getSession()
+        const { data } = await withTimeout(
+          supabase.auth.getSession(),
+          5000,
+          'Tempo limite ao carregar sessao'
+        )
         const sessionUser = data.session?.user || null
 
         if (active) {
@@ -1395,7 +1416,14 @@ export default function App() {
         }
 
         if (sessionUser) {
-          await loadCloudProgress(sessionUser, nextCards, nextStats)
+          withTimeout(
+            loadCloudProgress(sessionUser, nextCards, nextStats),
+            8000,
+            'Tempo limite ao sincronizar progresso'
+          ).catch(err => {
+            console.error(err)
+            if (active) setSyncStatus('Nao consegui sincronizar agora. Usando progresso local.')
+          })
           if (active) {
             setUser(sessionUser)
             setLogged(true)
