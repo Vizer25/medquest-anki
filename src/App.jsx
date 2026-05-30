@@ -664,6 +664,15 @@ function withTimeout(promise, ms, message) {
   ])
 }
 
+function authErrorMessage(error) {
+  const message = String(error?.message || '').trim()
+  if (!message) return 'Nao consegui conectar agora. Tente novamente em instantes.'
+  if (/invalid login credentials/i.test(message)) return 'Email ou senha recusados pelo Supabase. Confira se nao ha espaco, acento ou caractere diferente na senha.'
+  if (/email not confirmed/i.test(message)) return 'Esse email ainda nao foi confirmado no Supabase.'
+  if (/too many requests|rate limit/i.test(message)) return 'Muitas tentativas de login. Aguarde um pouco e tente novamente.'
+  return `Erro no login: ${message}`
+}
+
 function editDistance(a, b) {
   if (a === b) return 0
   if (Math.abs(a.length - b.length) > 2) return 3
@@ -1727,25 +1736,37 @@ export default function App() {
     }
     clearStoredAuthSession()
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password: senha
-    })
-
-    if (error || !data.user) {
-      setAuthLoading(false)
-      setFeedback({ type: 'bad', text: 'Login ou senha invalidos.' })
-      return
-    }
-
     try {
-      await loadCloudProgress(data.user)
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithPassword({
+          email,
+          password: senha
+        }),
+        10000,
+        'Tempo limite ao fazer login'
+      )
+
+      if (error || !data.user) {
+        setFeedback({ type: 'bad', text: authErrorMessage(error) })
+        return
+      }
+
       setUser(data.user)
       setLogged(true)
       setSenha('')
+      setFeedback(null)
+
+      withTimeout(
+        loadCloudProgress(data.user),
+        10000,
+        'Tempo limite ao carregar progresso'
+      ).catch(err => {
+        console.error(err)
+        setSyncStatus('Nao consegui sincronizar agora. Usando progresso local.')
+      })
     } catch (err) {
       console.error(err)
-      setFeedback({ type: 'bad', text: 'Entrei, mas nao consegui carregar o progresso salvo.' })
+      setFeedback({ type: 'bad', text: authErrorMessage(err) })
     } finally {
       setAuthLoading(false)
     }
