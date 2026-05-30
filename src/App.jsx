@@ -1311,6 +1311,7 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [logged, setLogged] = useState(false)
   const [user, setUser] = useState(null)
+  const [sessionToken, setSessionToken] = useState('')
   const [login, setLogin] = useState('')
   const [senha, setSenha] = useState('')
   const [rememberLogin, setRememberLogin] = useState(() => {
@@ -1354,18 +1355,65 @@ export default function App() {
   const [challengeLeft, setChallengeLeft] = useState(30)
   const answerRef = useRef(null)
 
-  async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats) {
+  async function loginThroughProxy(email, password) {
+    const response = await fetch('/api/auth-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || data.error_description || data.error || 'Falha no login.')
+    return data
+  }
+
+  async function getProfileThroughProxy(authedUser, token) {
+    if (!token) return null
+    const response = await fetch(`/api/profile?id=${encodeURIComponent(authedUser.id)}`, {
+      headers: { authorization: `Bearer ${token}` }
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok) throw new Error(data?.message || 'Falha ao carregar progresso.')
+    return data
+  }
+
+  async function saveProfileThroughProxy(authedUser, token, nextCards, nextStats) {
+    if (!token) throw new Error('Sessao sem token.')
+    const response = await fetch('/api/profile', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        id: authedUser.id,
+        email: authedUser.email,
+        cards: nextCards,
+        stats: nextStats
+      })
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.message || 'Falha ao salvar progresso.')
+    return data
+  }
+
+  async function loadCloudProgress(authedUser, seedCards = cards, seedStats = stats, token = sessionToken) {
     if (!authedUser) return
 
     setSyncStatus('Carregando progresso salvo...')
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('cards, stats')
-      .eq('id', authedUser.id)
-      .maybeSingle()
+    let data = null
+    if (token) {
+      data = await getProfileThroughProxy(authedUser, token)
+    } else {
+      const result = await supabase
+        .from('profiles')
+        .select('cards, stats')
+        .eq('id', authedUser.id)
+        .maybeSingle()
 
-    if (error) throw error
+      if (result.error) throw result.error
+      data = result.data
+    }
 
     const hasCloudCards = Array.isArray(data?.cards) && data.cards.length > 0
     const hasCloudStats = data?.stats && typeof data.stats === 'object'
@@ -1374,14 +1422,18 @@ export default function App() {
     if (hasCloudStats) setStats(safeStats(data.stats))
 
     if (!hasCloudCards && !hasCloudStats) {
-      await supabase
-        .from('profiles')
-        .upsert({
-          id: authedUser.id,
-          email: authedUser.email,
-          cards: seedCards,
-          stats: seedStats
-        })
+      if (token) {
+        await saveProfileThroughProxy(authedUser, token, seedCards, seedStats)
+      } else {
+        await supabase
+          .from('profiles')
+          .upsert({
+            id: authedUser.id,
+            email: authedUser.email,
+            cards: seedCards,
+            stats: seedStats
+          })
+      }
       setSyncStatus('Progresso local enviado para sua conta.')
       return
     }
@@ -1436,8 +1488,9 @@ export default function App() {
         }
 
         if (sessionUser) {
+          const token = data.session?.access_token || ''
           withTimeout(
-            loadCloudProgress(sessionUser, nextCards, nextStats),
+            loadCloudProgress(sessionUser, nextCards, nextStats, token),
             8000,
             'Tempo limite ao sincronizar progresso'
           ).catch(err => {
@@ -1446,6 +1499,7 @@ export default function App() {
           })
           if (active) {
             setUser(sessionUser)
+            setSessionToken(token)
             setLogged(true)
           }
         }
@@ -1648,20 +1702,31 @@ export default function App() {
 
     const saveTimer = window.setTimeout(async () => {
       setSyncStatus('Salvando progresso...')
-      const { error } = await supabase
-        .from('profiles')
-        .upsert({
-          id: user.id,
-          email: user.email,
-          cards,
-          stats
-        })
+      try {
+        if (sessionToken) {
+          await saveProfileThroughProxy(user, sessionToken, cards, stats)
+          setSyncStatus('Progresso salvo.')
+          return
+        }
 
-      setSyncStatus(error ? `Erro ao salvar progresso: ${error.message}` : 'Progresso salvo.')
+        const { error } = await supabase
+          .from('profiles')
+          .upsert({
+            id: user.id,
+            email: user.email,
+            cards,
+            stats
+          })
+
+        if (error) throw error
+        setSyncStatus('Progresso salvo.')
+      } catch (err) {
+        setSyncStatus(`Erro ao salvar progresso: ${err.message || 'falha de conexao'}`)
+      }
     }, 1200)
 
     return () => window.clearTimeout(saveTimer)
-  }, [cards, stats, ready, logged, user])
+  }, [cards, stats, ready, logged, user, sessionToken])
 
   useEffect(() => {
     if (currentCardId) {
@@ -1748,27 +1813,42 @@ export default function App() {
     clearStoredAuthSession()
 
     try {
-      const { data, error } = await withTimeout(
-        supabase.auth.signInWithPassword({
-          email,
-          password: senha
-        }),
-        30000,
-        'Tempo limite ao fazer login'
-      )
+      let authResult
+      try {
+        authResult = await withTimeout(
+          supabase.auth.signInWithPassword({
+            email,
+            password: senha
+          }),
+          12000,
+          'Tempo limite ao fazer login direto'
+        )
+      } catch (directErr) {
+        console.warn('Login direto falhou, tentando proxy do site.', directErr)
+        authResult = { data: await loginThroughProxy(email, senha), error: null }
+      }
+
+      if (authResult?.error && /failed to fetch|fetch|network|tempo limite/i.test(authResult.error.message || '')) {
+        console.warn('Login direto retornou erro de rede, tentando proxy do site.', authResult.error)
+        authResult = { data: await loginThroughProxy(email, senha), error: null }
+      }
+
+      const { data, error } = authResult
 
       if (error || !data.user) {
         setFeedback({ type: 'bad', text: authErrorMessage(error) })
         return
       }
 
+      const token = data.session?.access_token || data.access_token || ''
       setUser(data.user)
+      setSessionToken(token)
       setLogged(true)
       setSenha('')
       setFeedback(null)
 
       withTimeout(
-        loadCloudProgress(data.user),
+        loadCloudProgress(data.user, cards, stats, token),
         15000,
         'Tempo limite ao carregar progresso'
       ).catch(err => {
