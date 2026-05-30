@@ -1104,6 +1104,79 @@ function importCardKey(card) {
   return card.importKey || card.originalImportKey || stableCardKey(card)
 }
 
+function activeCardCount(cardList) {
+  return Array.isArray(cardList) ? cardList.filter(card => card && !card.deleted).length : 0
+}
+
+function cardProgressScore(card) {
+  if (!card || typeof card !== 'object') return 0
+  const attempts = Number(card.reviewAttempts || card.siteReps || card.reps || 0)
+  const correct = Number(card.correctCount || 0)
+  const level = Number(card.reviewLevel || 0)
+  const stage = Number(card.stageProgress || 0)
+  const editedAt = card.manualEditedAt ? new Date(card.manualEditedAt).getTime() : 0
+  const updatedAt = card.sourceUpdatedAt ? new Date(card.sourceUpdatedAt).getTime() : 0
+  const recency = Math.max(
+    Number.isFinite(editedAt) ? editedAt : 0,
+    Number.isFinite(updatedAt) ? updatedAt : 0
+  )
+  return attempts * 10000 + level * 1000 + stage * 100 + correct * 10 + Math.min(recency / 1000000000000, 9)
+}
+
+function cardIdentityKeys(card) {
+  if (!card) return []
+  const keys = new Set()
+  if (card.id) keys.add(`id:${String(card.id)}`)
+  const importKey = importCardKey(card)
+  if (importKey) keys.add(`import:${importKey}`)
+  const stableKey = stableCardKey(card)
+  if (stableKey) keys.add(`stable:${stableKey}`)
+  return Array.from(keys)
+}
+
+function chooseRicherCard(first, second) {
+  if (!first) return second
+  if (!second) return first
+  const preferred = cardProgressScore(second) > cardProgressScore(first) ? second : first
+  const fallback = preferred === first ? second : first
+  return {
+    ...fallback,
+    ...preferred,
+    pergunta: preferred.pergunta || fallback.pergunta,
+    resposta: preferred.resposta || fallback.resposta,
+    html_front: preferred.html_front || fallback.html_front,
+    html_back: preferred.html_back || fallback.html_back,
+    frontHtml: preferred.frontHtml || fallback.frontHtml,
+    backHtml: preferred.backHtml || fallback.backHtml,
+    tags: preferred.tags || fallback.tags,
+    importKey: preferred.importKey || fallback.importKey || importCardKey(preferred),
+    originalImportKey: preferred.originalImportKey || fallback.originalImportKey || importCardKey(preferred)
+  }
+}
+
+function mergeCardSources(...sources) {
+  const merged = []
+  const indexByKey = new Map()
+
+  sources.flat().filter(Boolean).forEach(card => {
+    const keys = cardIdentityKeys(card)
+    const existingIndex = keys.map(key => indexByKey.get(key)).find(index => index !== undefined)
+
+    if (existingIndex === undefined) {
+      const nextIndex = merged.length
+      merged.push(card)
+      keys.forEach(key => indexByKey.set(key, nextIndex))
+      return
+    }
+
+    const richer = chooseRicherCard(merged[existingIndex], card)
+    merged[existingIndex] = richer
+    cardIdentityKeys(richer).forEach(key => indexByKey.set(key, existingIndex))
+  })
+
+  return merged
+}
+
 function cardAddedScore(card) {
   const dateValue = card.importedAt || card.createdAt || card.manualEditedAt || card.sourceUpdatedAt || ''
   const dateScore = dateValue ? new Date(dateValue).getTime() : 0
@@ -1437,16 +1510,16 @@ export default function App() {
     return data
   }
 
-  async function syncCardsBatchThroughProxy(cardBatch) {
-    if (!user || !sessionToken || !cardBatch?.length) return null
+  async function syncCardsBatchThroughProxy(cardBatch, authUser = user, token = sessionToken) {
+    if (!authUser || !token || !cardBatch?.length) return null
     const response = await fetch('/api/sync-cards', {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${sessionToken}`,
+        authorization: `Bearer ${token}`,
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        userId: user.id,
+        userId: authUser.id,
         cards: cardBatch
       })
     })
@@ -1468,13 +1541,13 @@ export default function App() {
       })
   }
 
-  async function syncCardsInChunks(cardList, label = 'cards') {
-    if (!user || !sessionToken || !Array.isArray(cardList) || !cardList.length) return
+  async function syncCardsInChunks(cardList, label = 'cards', authUser = user, token = sessionToken) {
+    if (!authUser || !token || !Array.isArray(cardList) || !cardList.length) return
     const cardsToSync = cardList.filter(Boolean)
     const chunkSize = 100
     try {
       for (let i = 0; i < cardsToSync.length; i += chunkSize) {
-        await syncCardsBatchThroughProxy(cardsToSync.slice(i, i + chunkSize))
+        await syncCardsBatchThroughProxy(cardsToSync.slice(i, i + chunkSize), authUser, token)
         await new Promise(resolve => window.setTimeout(resolve, 150))
       }
       setSyncStatus(`${label} sincronizados em lotes pequenos.`)
@@ -1510,12 +1583,29 @@ export default function App() {
       setSyncStatus('Banco granular ainda nao esta pronto. Usando progresso local.')
     }
 
-    if (hasCloudCards) setCards(data.cards)
+    let cardsToUse = hasCloudCards ? data.cards : null
+    const localActive = activeCardCount(seedCards)
+    const cloudActive = activeCardCount(cardsToUse)
+    const localDeckIsLarger = hasCloudCards && localActive > cloudActive
+
+    if (localDeckIsLarger) {
+      cardsToUse = mergeCardSources(data.cards, seedCards)
+      setSyncStatus(`Recuperando deck local maior: ${activeCardCount(cardsToUse)} cards encontrados. Sincronizando em lotes...`)
+    }
+
+    if (hasCloudCards) setCards(cardsToUse)
     if (hasCloudStats) setStats(safeStats(data.stats))
 
     if (data?.migrationNeeded && hasCloudCards) {
-      setSyncStatus(`Recuperando backup antigo: ${data.legacyCardCount || data.cards.length} cards encontrados. Sincronizando em lotes...`)
-      syncCardsInChunks(data.cards, 'Backup antigo recuperado')
+      if (!localDeckIsLarger) {
+        setSyncStatus(`Recuperando backup antigo: ${data.legacyCardCount || data.cards.length} cards encontrados. Sincronizando em lotes...`)
+      }
+      syncCardsInChunks(cardsToUse, localDeckIsLarger ? 'Deck local recuperado' : 'Backup antigo recuperado', authedUser, token)
+      return
+    }
+
+    if (localDeckIsLarger) {
+      syncCardsInChunks(cardsToUse, 'Deck local recuperado', authedUser, token)
       return
     }
 
