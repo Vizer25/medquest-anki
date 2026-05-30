@@ -20,8 +20,6 @@ select{font-size:16px;border:1px solid #e5e7eb;border-radius:10px;padding:12px;b
 select:focus{border-color:#2563eb;box-shadow:0 0 0 4px #2563eb18}
 button,.import{border:0;background:#2563eb;color:white;padding:15px 22px;border-radius:10px;font-weight:800;font-size:17px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .login-card button{width:100%;justify-content:center;margin-top:8px}
-.login-card .local-login-button{background:#f2f4f7;color:#101828;border:1px solid #e5e7eb}
-.local-login-note{display:block;color:#667085;font-size:12px;line-height:1.35;text-align:center;margin-top:8px}
 .alert,.feedback{margin-top:20px;padding:16px;border-radius:14px;font-weight:800}
 .bad{background:#fff3f1;color:#a53a2d;border:1px solid #ffd8d2}
 .good{background:#ebf8f1;color:#167047;border:1px solid #c4edd8}

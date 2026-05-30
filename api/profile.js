@@ -14,11 +14,34 @@ function parseMaybeJson(text, fallback) {
   }
 }
 
-function authHeaders(req) {
+function bearerToken(req) {
   const authorization = req.headers.authorization || ''
+  if (!authorization.toLowerCase().startsWith('bearer ')) return ''
+  if (authorization.includes(SUPABASE_ANON_KEY)) return ''
+  return authorization
+}
+
+async function authenticatedUser(req) {
+  const authorization = bearerToken(req)
+  if (!authorization) return { error: 'Login obrigatorio.' }
+
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      authorization,
+      accept: 'application/json'
+    }
+  })
+  const text = await response.text()
+  const data = parseMaybeJson(text, null)
+  if (!response.ok || !data?.id) return { error: 'Sessao invalida ou expirada.' }
+  return { user: data, authorization }
+}
+
+function authHeaders(authorization) {
   return {
     apikey: SUPABASE_ANON_KEY,
-    authorization: authorization || `Bearer ${SUPABASE_ANON_KEY}`,
+    authorization,
     accept: 'application/json',
     'content-type': 'application/json'
   }
@@ -26,15 +49,21 @@ function authHeaders(req) {
 
 export default async function handler(req, res) {
   try {
+    const auth = await authenticatedUser(req)
+    if (auth.error) {
+      res.status(401).json({ message: auth.error })
+      return
+    }
+
     if (req.method === 'GET') {
-      const id = String(req.query.id || '')
-      if (!id) {
-        res.status(400).json({ message: 'ID obrigatorio.' })
+      const id = String(req.query.id || auth.user.id)
+      if (id !== auth.user.id) {
+        res.status(403).json({ message: 'Acesso negado.' })
         return
       }
 
       const response = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(id)}&select=cards,stats`, {
-        headers: authHeaders(req)
+        headers: authHeaders(auth.authorization)
       })
       const text = await response.text()
       const data = parseMaybeJson(text, [])
@@ -44,15 +73,15 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST') {
       const { id, email, cards, stats } = req.body || {}
-      if (!id) {
-        res.status(400).json({ message: 'ID obrigatorio.' })
+      if (id !== auth.user.id) {
+        res.status(403).json({ message: 'Acesso negado.' })
         return
       }
 
       const response = await fetch(`${SUPABASE_URL}/rest/v1/profiles?on_conflict=id`, {
         method: 'POST',
         headers: {
-          ...authHeaders(req),
+          ...authHeaders(auth.authorization),
           Prefer: 'resolution=merge-duplicates,return=minimal'
         },
         body: JSON.stringify({ id, email, cards, stats })

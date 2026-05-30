@@ -9,7 +9,6 @@ import {
   Brain, BarChart3, Plus, Download, Pencil, Trash2, PauseCircle, PlayCircle, Scissors
 } from 'lucide-react'
 const REMEMBER_LOGIN_KEY = 'mq_remember_login'
-const OFFLINE_SESSION_KEY = 'mq_offline_session'
 const authStorage = {
   getItem(key) {
     try {
@@ -1313,7 +1312,6 @@ export default function App() {
   const [logged, setLogged] = useState(false)
   const [user, setUser] = useState(null)
   const [sessionToken, setSessionToken] = useState('')
-  const [offlineMode, setOfflineMode] = useState(false)
   const [login, setLogin] = useState('')
   const [senha, setSenha] = useState('')
   const [rememberLogin, setRememberLogin] = useState(() => {
@@ -1399,7 +1397,7 @@ export default function App() {
   }
 
   async function syncReviewThroughProxy(card, event) {
-    if (!user || !sessionToken || offlineMode || !card?.id) return
+    if (!user || !sessionToken || !card?.id) return
     const response = await fetch('/api/sync-review', {
       method: 'POST',
       headers: {
@@ -1494,21 +1492,6 @@ export default function App() {
       }
 
       try {
-        if (sessionStorage.getItem(OFFLINE_SESSION_KEY) === 'true') {
-          if (active) {
-            setOfflineMode(true)
-            setUser(null)
-            setSessionToken('')
-            setLogged(true)
-            setSyncStatus('Modo local. Progresso salvo neste navegador.')
-          }
-          return
-        }
-      } catch {
-        // If sessionStorage is unavailable, the login screen still works normally.
-      }
-
-      try {
         const { data } = await withTimeout(
           supabase.auth.getSession(),
           5000,
@@ -1536,7 +1519,6 @@ export default function App() {
           if (active) {
             setUser(sessionUser)
             setSessionToken(token)
-            setOfflineMode(false)
             setLogged(true)
           }
         }
@@ -1815,41 +1797,6 @@ export default function App() {
     if (challengeLeft <= 0) evaluate({ timedOut: true })
   }, [timeChallenge, challengeLeft, current?.id, currentAlreadyAnswered, editing])
 
-  function enter() {
-    if (login.trim().toLowerCase() === 'leo' && senha === '1234') {
-      localStorage.setItem('mq_logged', 'true')
-      setLogged(true)
-      setFeedback(null)
-    } else {
-      setFeedback({ type: 'bad', text: 'Login ou senha inválidos.' })
-    }
-  }
-
-  function logout() {
-    localStorage.removeItem('mq_logged')
-    sessionStorage.removeItem(OFFLINE_SESSION_KEY)
-    setOfflineMode(false)
-    setLogged(false)
-    setFeedback(null)
-    setSiteSeconds(0)
-    setCardSeconds(0)
-  }
-
-  function enterOfflineMode() {
-    try {
-      sessionStorage.setItem(OFFLINE_SESSION_KEY, 'true')
-    } catch {
-      // Local mode still works; it just will not survive a refresh if storage is blocked.
-    }
-    setUser(null)
-    setSessionToken('')
-    setOfflineMode(true)
-    setLogged(true)
-    setSenha('')
-    setFeedback(null)
-    setSyncStatus('Modo local. Progresso salvo neste navegador.')
-  }
-
   async function cloudEnter() {
     const email = login.trim()
     if (!email || !senha) {
@@ -1897,7 +1844,6 @@ export default function App() {
       const token = data.session?.access_token || data.access_token || ''
       setUser(data.user)
       setSessionToken(token)
-      setOfflineMode(false)
       setLogged(true)
       setSenha('')
       setFeedback(null)
@@ -1919,16 +1865,14 @@ export default function App() {
   }
 
   async function cloudLogout() {
-    if (!offlineMode && user) {
+    if (user) {
       await supabase.auth.signOut().catch(err => console.warn('Nao foi possivel encerrar sessao remota.', err))
     }
     clearStoredAuthSession()
-    sessionStorage.removeItem(OFFLINE_SESSION_KEY)
     localStorage.removeItem(REMEMBER_LOGIN_KEY)
     setRememberLogin(false)
     setUser(null)
     setSessionToken('')
-    setOfflineMode(false)
     setLogged(false)
     setFeedback(null)
     setSyncStatus('')
@@ -2702,10 +2646,6 @@ export default function App() {
             <span>Manter conectado neste dispositivo privado</span>
           </label>
           <button onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
-          <button type="button" className="local-login-button" onClick={enterOfflineMode} disabled={authLoading}>
-            Usar sem sincronizar
-          </button>
-          <small className="local-login-note">Modo local para quando o Supabase estiver fora. Salva apenas neste navegador.</small>
           {feedback?.type === 'bad' && <div className="alert bad">{feedback.text}</div>}
           {feedback?.type === 'good' && <div className="alert good">{feedback.text}</div>}
         </section>
@@ -2721,7 +2661,7 @@ export default function App() {
         </div>
         <div className="profile">
           <div className="profile-copy">
-            <span>{offlineMode ? 'Modo local' : user?.email}</span>
+            <span>{user?.email}</span>
             {syncStatus && <small>{syncStatus}</small>}
           </div>
           <button onClick={cloudLogout}><LogOut size={20}/> Sair</button>

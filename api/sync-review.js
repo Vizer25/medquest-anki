@@ -10,20 +10,44 @@ function parseMaybeJson(text, fallback) {
   }
 }
 
-function headers(req) {
+function bearerToken(req) {
+  const authorization = req.headers.authorization || ''
+  if (!authorization.toLowerCase().startsWith('bearer ')) return ''
+  if (authorization.includes(SUPABASE_ANON_KEY)) return ''
+  return authorization
+}
+
+async function authenticatedUser(req) {
+  const authorization = bearerToken(req)
+  if (!authorization) return { error: 'Login obrigatorio.' }
+
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      authorization,
+      accept: 'application/json'
+    }
+  })
+  const text = await response.text()
+  const data = parseMaybeJson(text, null)
+  if (!response.ok || !data?.id) return { error: 'Sessao invalida ou expirada.' }
+  return { user: data, authorization }
+}
+
+function headers(authorization) {
   return {
     apikey: SUPABASE_ANON_KEY,
-    authorization: req.headers.authorization || `Bearer ${SUPABASE_ANON_KEY}`,
+    authorization,
     accept: 'application/json',
     'content-type': 'application/json'
   }
 }
 
-async function supabaseJson(path, req, options = {}) {
+async function supabaseJson(path, authorization, options = {}) {
   const response = await fetch(`${SUPABASE_URL}${path}`, {
     ...options,
     headers: {
-      ...headers(req),
+      ...headers(authorization),
       ...(options.headers || {})
     }
   })
@@ -42,9 +66,19 @@ export default async function handler(req, res) {
   }
 
   try {
+    const auth = await authenticatedUser(req)
+    if (auth.error) {
+      res.status(401).json({ message: auth.error })
+      return
+    }
+
     const { userId, card, event } = req.body || {}
     if (!userId || !card?.id) {
       res.status(400).json({ message: 'userId e card.id sao obrigatorios.' })
+      return
+    }
+    if (userId !== auth.user.id) {
+      res.status(403).json({ message: 'Acesso negado.' })
       return
     }
 
@@ -68,7 +102,7 @@ export default async function handler(req, res) {
       updated_at: new Date().toISOString()
     }
 
-    const cardResult = await supabaseJson('/rest/v1/mq_cards?on_conflict=user_id,card_id', req, {
+    const cardResult = await supabaseJson('/rest/v1/mq_cards?on_conflict=user_id,card_id', auth.authorization, {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify(cardPayload)
@@ -91,7 +125,7 @@ export default async function handler(req, res) {
         payload: event
       }
 
-      await supabaseJson('/rest/v1/mq_review_events', req, {
+      await supabaseJson('/rest/v1/mq_review_events', auth.authorization, {
         method: 'POST',
         headers: { Prefer: 'return=minimal' },
         body: JSON.stringify(eventPayload)
