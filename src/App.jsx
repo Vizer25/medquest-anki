@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs'
 import JSZip from 'jszip'
 import initSqlJs from 'sql.js'
 import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
@@ -56,13 +57,23 @@ const supabase = createClient(
 )
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
-const REVIEW_STAGES = [
-  { level: 0, label: '10 minutos', delay: 10 * 60 * 1000 },
-  { level: 1, label: '3 dias', delay: 3 * DAY },
-  { level: 2, label: '10 dias', delay: 10 * DAY },
-  { level: 3, label: '30 dias', delay: 30 * DAY }
-]
-const REVIEW_STAGE_NAMES = ['10 minutos', '3 dias', '10 dias', '30 dias']
+const FSRS_REVIEW_PAUSE_NEW_THRESHOLD = 60
+const DEFAULT_FSRS_RETENTION = 0.91
+
+function normalizedRetention(value = DEFAULT_FSRS_RETENTION) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return DEFAULT_FSRS_RETENTION
+  return Math.max(0.7, Math.min(0.99, parsed > 1 ? parsed / 100 : parsed))
+}
+
+function createFsrsScheduler(retention = DEFAULT_FSRS_RETENTION) {
+  return fsrs({
+    request_retention: normalizedRetention(retention),
+    enable_short_term: true,
+    learning_steps: ['10m'],
+    relearning_steps: ['10m']
+  })
+}
 
 function getStoredCurrentCardId() {
   try {
@@ -110,7 +121,8 @@ const DEFAULT_CONFIG = {
   goodDays: 1,
   easyDays: 4,
   dailyGoal: 100,
-  newDailyGoal: 40
+  newDailyGoal: 40,
+  fsrsRetention: DEFAULT_FSRS_RETENTION
 }
 
 function configuredNewDailyGoal(config = {}) {
@@ -228,11 +240,62 @@ function hasScheduledDue(card) {
 }
 
 function hasReviewHistory(card) {
+  if (card?.fsrsState != null || card?.fsrsLastReview || Array.isArray(card?.fsrsHistory)) return true
   return Number(card?.siteReps || 0) > 0 ||
     Number(card?.correctCount || 0) > 0 ||
     Number(card?.reviewLevel || 0) > 0 ||
     Number(card?.stageProgress || 0) > 0 ||
     Boolean(card?.lastGrade)
+}
+
+function fsrsStateFromCard(card) {
+  const raw = card?.fsrsState
+  if (raw === State.New || raw === 'New') return State.New
+  if (raw === State.Learning || raw === 'Learning') return State.Learning
+  if (raw === State.Review || raw === 'Review') return State.Review
+  if (raw === State.Relearning || raw === 'Relearning') return State.Relearning
+  if (!hasReviewHistory(card)) return State.New
+  return State.Review
+}
+
+function dateInput(value, fallback = Date.now()) {
+  const timestamp = optionalTimestamp(value)
+  return new Date(timestamp || fallback)
+}
+
+function fsrsCardFromAppCard(card, now = Date.now()) {
+  const empty = createEmptyCard(dateInput(card?.createdAt, now))
+  const state = fsrsStateFromCard(card)
+  return {
+    ...empty,
+    due: dateInput(card?.fsrsDue || card?.dueAt, now),
+    stability: Number(card?.fsrsStability || 0),
+    difficulty: Number(card?.fsrsDifficulty || 0),
+    elapsed_days: Number(card?.fsrsElapsedDays || 0),
+    scheduled_days: Number(card?.fsrsScheduledDays || 0),
+    learning_steps: Number(card?.fsrsLearningSteps || 0),
+    reps: Math.max(Number(card?.fsrsReps || 0), Number(card?.reviewAttempts || 0), Number(card?.siteReps || 0)),
+    lapses: Math.max(Number(card?.fsrsLapses || 0), Number(card?.reviewWrong || 0)),
+    state,
+    last_review: card?.fsrsLastReview || card?.lastReviewedAt ? dateInput(card?.fsrsLastReview || card?.lastReviewedAt, now) : undefined
+  }
+}
+
+function fsrsRatingFromGrade(grade) {
+  return grade === 'good' || grade === 'easy' ? Rating.Good : Rating.Again
+}
+
+function fsrsStateLabel(state) {
+  if (state === State.Learning) return 'Aprendizado'
+  if (state === State.Relearning) return 'Reaprendizado'
+  if (state === State.Review) return 'Revisao'
+  return 'Inedito'
+}
+
+function fsrsSchedulePreview(card, grade, now = Date.now(), retention = DEFAULT_FSRS_RETENTION) {
+  const result = createFsrsScheduler(retention).next(fsrsCardFromAppCard(card, now), new Date(now), fsrsRatingFromGrade(grade))
+  const delay = Math.max(0, result.card.due.getTime() - now)
+  return { ...result, delay }
 }
 
 function isCardDue(card, now = Date.now()) {
@@ -291,36 +354,16 @@ function inferReviewState(card) {
   return reviewStateFromCorrectCount(card?.correctCount)
 }
 
-function previewSchedule(card, grade) {
-  const isWrong = grade === 'again' || grade === 'hard'
-  const currentState = inferReviewState(card)
-  let level = currentState.level
-  let progress = currentState.progress
-
-  if (isWrong) {
-    if (level > 0) {
-      level -= 1
-      progress = 0
-    } else {
-      progress = 0
-    }
-  } else {
-    progress += 1
-    if (progress >= requiredCorrectsForStage(level) && level < REVIEW_STAGES.length - 1) {
-      level += 1
-      progress = 0
-    } else if (level === REVIEW_STAGES.length - 1) {
-      progress = Math.min(requiredCorrectsForStage(level) - 1, progress)
-    }
-  }
-
-  const stage = REVIEW_STAGES[level]
+function previewSchedule(card, grade, retention = DEFAULT_FSRS_RETENTION) {
+  const next = fsrsSchedulePreview(card, grade, Date.now(), retention)
   return {
-    level,
-    progress,
-    delay: stage.delay,
-    label: stage.label,
-    correctCount: correctCountFromReviewState(level, progress)
+    level: next.card.state,
+    progress: next.card.learning_steps || 0,
+    delay: next.delay,
+    label: fsrsStateLabel(next.card.state),
+    correctCount: Number(card?.correctCount || 0) + (fsrsRatingFromGrade(grade) === Rating.Good ? 1 : 0),
+    fsrsCard: next.card,
+    fsrsLog: next.log
   }
 }
 
@@ -364,25 +407,28 @@ function reviewStageDetails(card) {
     }
   }
 
-  const state = inferReviewState(card)
-  const label = REVIEW_STAGE_NAMES[state.level] || REVIEW_STAGES[state.level]?.label || '10 minutos'
-  const nextLabel = REVIEW_STAGE_NAMES[state.level + 1]
-  const required = requiredCorrectsForStage(state.level)
-  const progress = state.level >= REVIEW_STAGES.length - 1
-    ? 'Categoria final: revisão de 30 dias'
-    : `${state.progress}/${required} acertos para ir para ${nextLabel.toLowerCase()}`
+  const state = fsrsStateFromCard(card)
+  const scheduledDays = Math.max(0, Number(card?.fsrsScheduledDays || card?.interval || 0))
+  const label = fsrsStateLabel(state)
+  const stability = Number(card?.fsrsStability || 0)
+  const difficulty = Number(card?.fsrsDifficulty || 0)
+  const progressParts = []
+  if (scheduledDays > 0) progressParts.push(`Intervalo FSRS: ${scheduledDays}d`)
+  if (stability || difficulty) progressParts.push(`Estabilidade ${stability.toFixed(1)} | Dificuldade ${difficulty.toFixed(1)}`)
+  const progress = progressParts.join(' | ') || fsrsStateLabel(state)
 
   return {
-    level: state.level,
+    level: state,
     label,
-    className: `stage-${state.level}`,
+    className: `stage-${state}`,
     progress
   }
 }
 
 function reviewCategoryKey(card) {
   if (!hasReviewHistory(card)) return 'new'
-  return String(inferReviewState(card).level)
+  const state = fsrsStateFromCard(card)
+  return state === State.New ? 'new' : String(state)
 }
 
 function sortCardsByDifficulty(a, b, metricsByCard = new Map()) {
@@ -474,30 +520,28 @@ function isUnseenStudyCard(card, seenIds) {
   return !hasReviewHistory(card) && !seenIds.has(card.id)
 }
 
+function fsrsReviewPriority(card) {
+  const state = fsrsStateFromCard(card)
+  if (state === State.Review) return 0
+  if (state === State.Learning || state === State.Relearning) return 1
+  return 2
+}
+
 function sortReviewQueue(cards, now = Date.now()) {
   const tieSeed = todayKey()
-  const todayStart = startOfDayTimestamp(now)
   return [...cards].sort((a, b) => {
-    const aState = inferReviewState(a)
-    const bState = inferReviewState(b)
-    if (aState.level !== bState.level) return bState.level - aState.level
-
-    if (aState.level === 0) {
-      const aDueTime = dueTimestamp(a, now)
-      const bDueTime = dueTimestamp(b, now)
-      const aReviewedToday = optionalTimestamp(a.lastReviewedAt) >= todayStart || (hasScheduledDue(a) && aDueTime >= todayStart)
-      const bReviewedToday = optionalTimestamp(b.lastReviewedAt) >= todayStart || (hasScheduledDue(b) && bDueTime >= todayStart)
-
-      if (aReviewedToday !== bReviewedToday) return aReviewedToday ? -1 : 1
-      if (aReviewedToday && aDueTime !== bDueTime) return aDueTime - bDueTime
-
-      const repsDiff = totalSiteReps(b) - totalSiteReps(a)
-      if (repsDiff) return repsDiff
-    }
+    const aPriority = fsrsReviewPriority(a)
+    const bPriority = fsrsReviewPriority(b)
+    if (aPriority !== bPriority) return aPriority - bPriority
 
     const aTime = dueTimestamp(a, now)
     const bTime = dueTimestamp(b, now)
     if (aTime !== bTime) return aTime - bTime
+
+    if (aPriority === 1) {
+      const repsDiff = totalSiteReps(b) - totalSiteReps(a)
+      if (repsDiff) return repsDiff
+    }
 
     return hashString(`${a.id}-${tieSeed}`) - hashString(`${b.id}-${tieSeed}`)
   })
@@ -514,7 +558,9 @@ function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now(), rec
     now
   )
 
-  if (!shouldPullUnseen || !unseen.length) return [...reviews, ...unseen]
+  const pauseNewCards = reviews.length >= FSRS_REVIEW_PAUSE_NEW_THRESHOLD
+
+  if (!shouldPullUnseen || pauseNewCards || !unseen.length) return reviews
   if (!reviews.length) return unseen
 
   const queue = []
@@ -1213,11 +1259,13 @@ function mergeCardSources(...sources) {
 }
 
 function cardAddedScore(card) {
-  const dateValue = card.importedAt || card.createdAt || card.manualEditedAt || card.sourceUpdatedAt || ''
-  const dateScore = dateValue ? new Date(dateValue).getTime() : 0
-  if (Number.isFinite(dateScore) && dateScore > 0) return dateScore
-  const idMatch = String(card.id || '').match(/\d+/g)
-  return idMatch?.length ? Number(idMatch.join('').slice(0, 15)) || 0 : 0
+  const dateScore = ['createdAt', 'sourceUpdatedAt', 'manualEditedAt', 'importedAt']
+    .map(key => new Date(card?.[key] || '').getTime())
+    .filter(score => Number.isFinite(score) && score > 0)
+    .reduce((max, score) => Math.max(max, score), 0)
+  const idMatch = String(card.id || card.importKey || '').match(/\d+/g)
+  const idScore = idMatch?.length ? Number(idMatch.join('').slice(0, 15)) || 0 : 0
+  return Math.max(dateScore, idScore)
 }
 
 function imageTags(html) {
@@ -1987,7 +2035,13 @@ export default function App() {
     })
   }, [activeCards, searchTerm, libraryTagFilter])
   const reviewCategoryCounts = useMemo(() => {
-    const counts = { all: libraryBaseCards.length, new: 0, 0: 0, 1: 0, 2: 0, 3: 0 }
+    const counts = {
+      all: libraryBaseCards.length,
+      new: 0,
+      [String(State.Learning)]: 0,
+      [String(State.Relearning)]: 0,
+      [String(State.Review)]: 0
+    }
     libraryBaseCards.forEach(card => {
       const key = reviewCategoryKey(card)
       counts[key] = (counts[key] || 0) + 1
@@ -1996,11 +2050,10 @@ export default function App() {
   }, [libraryBaseCards])
   const reviewCategoryOptions = [
     { key: 'all', label: 'Todos' },
-    { key: 'new', label: 'Inéditos' },
-    { key: '0', label: '10 minutos' },
-    { key: '1', label: '3 dias' },
-    { key: '2', label: '10 dias' },
-    { key: '3', label: '30 dias' }
+    { key: 'new', label: 'Ineditos' },
+    { key: String(State.Learning), label: 'Aprendizado' },
+    { key: String(State.Relearning), label: 'Reaprendizado' },
+    { key: String(State.Review), label: 'Revisao FSRS' }
   ]
   const filteredCards = useMemo(() => {
     return libraryBaseCards
@@ -2260,13 +2313,37 @@ export default function App() {
   function scheduleCard(card, grade) {
     const now = Date.now()
     const reviewedAt = new Date(now).toISOString()
-    const nextSchedule = previewSchedule(card, grade)
-    const isCorrectGrade = grade === 'good' || grade === 'easy'
+    const nextSchedule = previewSchedule(card, grade, config.fsrsRetention)
+    const fsrsCard = nextSchedule.fsrsCard
+    const isCorrectGrade = fsrsRatingFromGrade(grade) === Rating.Good
     const previousAttempts = Math.max(Number(card.reviewAttempts || 0), Number(card.siteReps || 0))
+    const intervalMs = Math.max(0, fsrsCard.due.getTime() - now)
+    const fsrsHistory = Array.isArray(card.fsrsHistory) ? card.fsrsHistory : []
+    const fsrsHistoryItem = {
+      date: reviewedAt,
+      rating: isCorrectGrade ? 'good' : 'again',
+      state: fsrsCard.state,
+      dueAt: fsrsCard.due.toISOString(),
+      intervalDays: fsrsCard.scheduled_days,
+      difficulty: fsrsCard.difficulty,
+      stability: fsrsCard.stability
+    }
 
     return {
       ...card,
-      dueAt: now + nextSchedule.delay,
+      dueAt: fsrsCard.due.getTime(),
+      fsrsDue: fsrsCard.due.toISOString(),
+      fsrsState: fsrsCard.state,
+      fsrsLastReview: reviewedAt,
+      fsrsIntervalDays: fsrsCard.scheduled_days,
+      fsrsScheduledDays: fsrsCard.scheduled_days,
+      fsrsElapsedDays: fsrsCard.elapsed_days,
+      fsrsLearningSteps: fsrsCard.learning_steps,
+      fsrsDifficulty: fsrsCard.difficulty,
+      fsrsStability: fsrsCard.stability,
+      fsrsReps: fsrsCard.reps,
+      fsrsLapses: fsrsCard.lapses,
+      fsrsHistory: [...fsrsHistory, fsrsHistoryItem].slice(-500),
       reps: Number(card.reps || 0),
       siteReps: Number(card.siteReps || 0) + 1,
       reviewAttempts: previousAttempts + 1,
@@ -2276,9 +2353,10 @@ export default function App() {
       reviewLevel: nextSchedule.level,
       stageProgress: nextSchedule.progress,
       lastGrade: grade,
-      lastIntervalMs: nextSchedule.delay,
+      lastIntervalMs: intervalMs,
       lastReviewedAt: reviewedAt,
-      firstReviewedAt: card.firstReviewedAt || reviewedAt
+      firstReviewedAt: card.firstReviewedAt || reviewedAt,
+      interval: fsrsCard.scheduled_days
     }
   }
 
@@ -2358,7 +2436,7 @@ export default function App() {
       answeredAt: new Date().toISOString(),
       isNewCard
     })
-    const nextSchedule = previewSchedule(current, grade)
+    const nextSchedule = previewSchedule(current, grade, config.fsrsRetention)
     const scheduleLabel = nextSchedule.label
 
     setFeedback({
@@ -2567,7 +2645,7 @@ export default function App() {
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'good'
 
-    const nextSchedule = previewSchedule(current, correctedGrade)
+    const nextSchedule = previewSchedule(current, correctedGrade, config.fsrsRetention)
     setPendingGrade(prev => ({
       ...(prev || {}),
       cardId: current.id,
@@ -2630,7 +2708,7 @@ export default function App() {
     const previousGrade = feedback.grade || pendingGrade?.grade || 'good'
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'again'
-    const nextSchedule = previewSchedule(current, correctedGrade)
+    const nextSchedule = previewSchedule(current, correctedGrade, config.fsrsRetention)
 
     setPendingGrade(prev => ({
       ...(prev || {}),
@@ -3474,16 +3552,15 @@ export default function App() {
 
       {tab === 'settings' && (
         <section className="card">
-          <h2>Configurações de espaçamento</h2>
+          <h2>Configuracoes FSRS</h2>
           <p className="hint">
-            Regra atual: cada fase precisa de 2 acertos para avançar. Primeiro ciclo: 10 minutos;
-            depois 3 dias; depois 10 dias; depois 30 dias. A fase de 10 dias precisa de apenas 1 acerto para virar 30 dias.
-            Ao errar, o card cai uma fase.
-            Enquanto houver meta de inéditos pendente, a fila intercala 2 revisões para 1 inédito.
+            FSRS ativo com retencao desejada de {Math.round(normalizedRetention(config.fsrsRetention) * 100)}%.
+            A fila prioriza cards vencidos e em aprendizado/reaprendizado; quando controlada, intercala 2 revisoes para 1 inedito.
           </p>
           <div className="settings-grid">
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
             <label>Meta de inéditos/dia<input type="number" min="1" value={configuredNewDailyGoal(config)} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
+            <label>Retencao FSRS (%)<input type="number" min="70" max="99" value={Math.round(normalizedRetention(config.fsrsRetention) * 100)} onChange={e=>setConfig({...config, fsrsRetention: normalizedRetention(Number(e.target.value) / 100)})}/></label>
           </div>
         </section>
       )}
