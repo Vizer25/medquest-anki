@@ -1363,8 +1363,23 @@ function shouldShowLibraryFrontPreview(card) {
 function RichTextEditor({ value, onChange }) {
   const editorRef = useRef(null)
   const lastHtmlRef = useRef(null)
+  const savedSelectionRef = useRef(null)
   const fontColors = ['#111827', '#2563eb', '#b42318', '#db2777', '#167047']
   const highlightColors = ['#fff200', '#bfdbfe', '#fbcfe8', '#fecaca', '#93c5fd']
+  const fontSizes = ['12px', '14px', '16px', '18px', '20px', '24px', '28px']
+  const lineHeights = [
+    { label: '1,0', value: '1' },
+    { label: '1,15', value: '1.15' },
+    { label: 'ABNT 1,5', value: '1.5' },
+    { label: '2,0', value: '2' }
+  ]
+  const paragraphSpaces = [
+    { label: '0 px', value: '0px' },
+    { label: '6 px', value: '6px' },
+    { label: '10 px', value: '10px' },
+    { label: '12 px', value: '12px' },
+    { label: '18 px', value: '18px' }
+  ]
 
   useEffect(() => {
     if (!editorRef.current || value === lastHtmlRef.current) return
@@ -1378,27 +1393,84 @@ function RichTextEditor({ value, onChange }) {
     onChange(html)
   }
 
+  function saveSelection() {
+    const selection = window.getSelection()
+    if (!selection?.rangeCount || !editorRef.current?.contains(selection.anchorNode)) return
+    savedSelectionRef.current = selection.getRangeAt(0).cloneRange()
+  }
+
+  function restoreSelection() {
+    editorRef.current?.focus()
+    if (!savedSelectionRef.current) return
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(savedSelectionRef.current)
+  }
+
   function runCommand(command, option = null) {
+    restoreSelection()
     document.execCommand(command, false, option)
     emitChange()
+    saveSelection()
     editorRef.current?.focus()
   }
 
   function insertSymbol(symbol) {
-    editorRef.current?.focus()
-    document.execCommand('insertText', false, symbol)
+    runCommand('insertText', symbol)
+  }
+
+  function applyFontSize(size) {
+    restoreSelection()
+    document.execCommand('fontSize', false, '7')
+    editorRef.current?.querySelectorAll('font[size="7"]').forEach(node => {
+      const span = document.createElement('span')
+      span.style.fontSize = size
+      span.innerHTML = node.innerHTML
+      node.replaceWith(span)
+    })
     emitChange()
+    saveSelection()
+    editorRef.current?.focus()
+  }
+
+  function currentBlock() {
+    const selection = window.getSelection()
+    let node = selection?.anchorNode
+    if (!node || !editorRef.current?.contains(node)) return null
+    if (node.nodeType === Node.TEXT_NODE) node = node.parentElement
+    while (node && node !== editorRef.current && !['P', 'DIV', 'LI'].includes(node.tagName)) {
+      node = node.parentElement
+    }
+    if (!node || node === editorRef.current) {
+      document.execCommand('formatBlock', false, 'div')
+      node = window.getSelection()?.anchorNode
+      if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement
+      while (node && node !== editorRef.current && !['P', 'DIV', 'LI'].includes(node.tagName)) {
+        node = node.parentElement
+      }
+    }
+    return node && node !== editorRef.current ? node : null
+  }
+
+  function applyBlockStyle(styles) {
+    restoreSelection()
+    const block = currentBlock()
+    if (block) Object.assign(block.style, styles)
+    else if (editorRef.current) Object.assign(editorRef.current.style, styles)
+    emitChange()
+    saveSelection()
+    editorRef.current?.focus()
   }
 
   function handleEditorKeyDown(event) {
     if (!(event.ctrlKey || event.metaKey)) return
     if (event.key === '.' || event.key === '>') {
       event.preventDefault()
-      insertSymbol('≥')
+      insertSymbol('\u2265')
     }
     if (event.key === ',' || event.key === '<') {
       event.preventDefault()
-      insertSymbol('≤')
+      insertSymbol('\u2264')
     }
   }
 
@@ -1409,9 +1481,59 @@ function RichTextEditor({ value, onChange }) {
   return (
     <div className="rich-editor">
       <div className="rich-toolbar">
-        <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); runCommand('bold') }}>B</button>
-        <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('≥') }}>≥</button>
-        <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('≤') }}>≤</button>
+        <div className="toolbar-group">
+          <button type="button" className="tool-button" title="Negrito" onMouseDown={e => { e.preventDefault(); runCommand('bold') }}>B</button>
+          <select
+            className="toolbar-select"
+            defaultValue=""
+            title="Tamanho da fonte"
+            onChange={e => {
+              if (e.target.value) applyFontSize(e.target.value)
+              e.target.value = ''
+            }}
+          >
+            <option value="">Tamanho</option>
+            {fontSizes.map(size => <option key={size} value={size}>{size.replace('px', '')}</option>)}
+          </select>
+        </div>
+        <div className="toolbar-group">
+          <button type="button" className="tool-button tool-text" title="Alinhar à esquerda" onMouseDown={e => { e.preventDefault(); runCommand('justifyLeft') }}>E</button>
+          <button type="button" className="tool-button tool-text" title="Centralizar" onMouseDown={e => { e.preventDefault(); runCommand('justifyCenter') }}>C</button>
+          <button type="button" className="tool-button tool-text" title="Justificar" onMouseDown={e => { e.preventDefault(); runCommand('justifyFull') }}>J</button>
+        </div>
+        <div className="toolbar-group">
+          <select
+            className="toolbar-select"
+            defaultValue=""
+            title="Espaçamento entre linhas"
+            onChange={e => {
+              if (e.target.value) applyBlockStyle({ lineHeight: e.target.value })
+              e.target.value = ''
+            }}
+          >
+            <option value="">Linha</option>
+            {lineHeights.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+          <select
+            className="toolbar-select"
+            defaultValue=""
+            title="Espaço após parágrafo"
+            onChange={e => {
+              if (e.target.value) applyBlockStyle({ marginBottom: e.target.value })
+              e.target.value = ''
+            }}
+          >
+            <option value="">Parágrafo</option>
+            {paragraphSpaces.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </div>
+        <details className="toolbar-menu">
+          <summary>Sinais</summary>
+          <div className="toolbar-popover">
+            <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('\u2265') }}>{'\u2265'}</button>
+            <button type="button" className="tool-button" onMouseDown={e => { e.preventDefault(); insertSymbol('\u2264') }}>{'\u2264'}</button>
+          </div>
+        </details>
         <span className="toolbar-label">Fonte</span>
         {fontColors.map(color => (
           <button type="button" aria-label={`Fonte ${color}`} className="color-button" key={`font-${color}`} style={{ background: color }} onMouseDown={e => { e.preventDefault(); runCommand('foreColor', color) }} />
@@ -1429,6 +1551,9 @@ function RichTextEditor({ value, onChange }) {
         suppressContentEditableWarning
         onInput={emitChange}
         onKeyDown={handleEditorKeyDown}
+        onKeyUp={saveSelection}
+        onMouseUp={saveSelection}
+        onFocus={saveSelection}
       />
     </div>
   )
@@ -1472,6 +1597,8 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('')
   const [cardStageFilter, setCardStageFilter] = useState('all')
   const [librarySortMode, setLibrarySortMode] = useState('difficulty')
+  const [libraryTagFilter, setLibraryTagFilter] = useState('')
+  const [libraryVisibleCount, setLibraryVisibleCount] = useState(80)
   const [studyTag, setStudyTag] = useState('')
   const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
@@ -1850,14 +1977,23 @@ export default function App() {
     feedback?.cardId === current.id
   )
   const reviewMetricsByCard = useMemo(() => buildCardReviewMetrics(stats.history), [stats.history])
+  const libraryBaseCards = useMemo(() => {
+    const q = normalize(searchTerm)
+    return activeCards.filter(card => {
+      const tagList = String(card.tags || '').split(/\s+/).filter(Boolean)
+      const matchesTag = !libraryTagFilter || tagList.includes(libraryTagFilter)
+      const matchesSearch = !q || normalize(`${card.pergunta || ''} ${card.resposta || ''} ${card.tags || ''}`).includes(q)
+      return matchesTag && matchesSearch
+    })
+  }, [activeCards, searchTerm, libraryTagFilter])
   const reviewCategoryCounts = useMemo(() => {
-    const counts = { all: activeCards.length, new: 0, 0: 0, 1: 0, 2: 0, 3: 0 }
-    activeCards.forEach(card => {
+    const counts = { all: libraryBaseCards.length, new: 0, 0: 0, 1: 0, 2: 0, 3: 0 }
+    libraryBaseCards.forEach(card => {
       const key = reviewCategoryKey(card)
       counts[key] = (counts[key] || 0) + 1
     })
     return counts
-  }, [activeCards])
+  }, [libraryBaseCards])
   const reviewCategoryOptions = [
     { key: 'all', label: 'Todos' },
     { key: 'new', label: 'Inéditos' },
@@ -1866,15 +2002,20 @@ export default function App() {
     { key: '2', label: '10 dias' },
     { key: '3', label: '30 dias' }
   ]
-  const filteredCards = activeCards.filter(c => {
-    const q = normalize(searchTerm)
-    const matchesSearch = !q || normalize(`${c.pergunta || ''} ${c.resposta || ''} ${c.tags || ''}`).includes(q)
-    const matchesStage = cardStageFilter === 'all' || reviewCategoryKey(c) === cardStageFilter
-    return matchesSearch && matchesStage
-  }).sort((a, b) => {
-    if (librarySortMode === 'recent') return cardAddedScore(b) - cardAddedScore(a)
-    return sortCardsByDifficulty(a, b, reviewMetricsByCard)
-  })
+  const filteredCards = useMemo(() => {
+    return libraryBaseCards
+      .filter(c => cardStageFilter === 'all' || reviewCategoryKey(c) === cardStageFilter)
+      .sort((a, b) => {
+        if (librarySortMode === 'recent') return cardAddedScore(b) - cardAddedScore(a)
+        return sortCardsByDifficulty(a, b, reviewMetricsByCard)
+      })
+  }, [libraryBaseCards, cardStageFilter, librarySortMode, reviewMetricsByCard])
+  const visibleFilteredCards = filteredCards.slice(0, libraryVisibleCount)
+
+  useEffect(() => {
+    setLibraryVisibleCount(80)
+  }, [searchTerm, cardStageFilter, libraryTagFilter, librarySortMode])
+
   const statsPanel = (
     <>
       <section className="stats stats-summary">
@@ -3068,6 +3209,27 @@ export default function App() {
             placeholder="Buscar flashcard por pergunta, resposta ou tag..."
             className="search-input"
           />
+          <div className="library-filter-row">
+            <label>
+              Tag
+              <select value={libraryTagFilter} onChange={e => setLibraryTagFilter(e.target.value)}>
+                <option value="">Todas as tags</option>
+                {allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="secondary compact-button"
+              onClick={() => {
+                setSearchTerm('')
+                setCardStageFilter('all')
+                setLibraryTagFilter('')
+                setLibrarySortMode('difficulty')
+              }}
+            >
+              Limpar filtros
+            </button>
+          </div>
           <div className="stage-filter">
             {reviewCategoryOptions.map(option => (
               <button
@@ -3097,29 +3259,11 @@ export default function App() {
               Ultimos adicionados
             </button>
           </div>
-          <div className="tag-cloud">
-            {allTags.map(tag => (
-              <button
-                className={studyTag === tag ? 'active' : ''}
-                key={tag}
-                onClick={() => {
-                  setStudyTag(tag)
-                  setFocusedCardIds([])
-                  setIndex(0)
-                  setCurrentCardId('')
-                  setAnswer('')
-                  setFeedback(null)
-                  setPendingGrade(null)
-                  setTab('study')
-                }}
-              >
-                {tag}
-              </button>
-            ))}
-          </div>
-          <p className="hint">{filteredCards.length} de {activeCards.length} flashcards encontrados, ordenados por maior número de repetições no site. Suspensos: {suspendedCount}. Excluidos preservados: {deletedCount}.</p>
+          <p className="hint">
+            {filteredCards.length} de {activeCards.length} flashcards encontrados. Mostrando {visibleFilteredCards.length}. Ordenacao: {librarySortMode === 'recent' ? 'ultimos adicionados' : 'mais repetidos'}. Suspensos: {suspendedCount}. Excluidos preservados: {deletedCount}.
+          </p>
           <div className="grid-cards">
-            {filteredCards.map((c, i) => {
+            {visibleFilteredCards.map((c, i) => {
               const v = getCardView(c)
               const stage = reviewStageDetails(v)
               const reviewSummary = reviewCountSummary(v, reviewMetricsByCard.get(v.id))
@@ -3198,6 +3342,11 @@ export default function App() {
               )
             })}
           </div>
+          {visibleFilteredCards.length < filteredCards.length && (
+            <button type="button" className="secondary load-more-button" onClick={() => setLibraryVisibleCount(count => count + 80)}>
+              Mostrar mais {Math.min(80, filteredCards.length - visibleFilteredCards.length)}
+            </button>
+          )}
         </section>
       )}
 
