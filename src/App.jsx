@@ -113,6 +113,12 @@ const DEFAULT_CONFIG = {
   newDailyGoal: 40
 }
 
+function configuredNewDailyGoal(config = {}) {
+  const configured = Number(config.newDailyGoal)
+  if (Number.isFinite(configured) && configured > 0) return configured
+  return DEFAULT_CONFIG.newDailyGoal
+}
+
 const DEFAULT_STATS = {
   xp: 0,
   level: 1,
@@ -160,6 +166,12 @@ function todayKey() {
   return dateKey(new Date())
 }
 
+function startOfDayTimestamp(now = Date.now()) {
+  const date = new Date(now)
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
 function dateKey(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
@@ -193,6 +205,20 @@ function dueTimestamp(card, fallback = Date.now()) {
   }
 
   return fallback
+}
+
+function optionalTimestamp(raw) {
+  if (raw == null || raw === '') return 0
+
+  const numericValue = Number(raw)
+  if (Number.isFinite(numericValue) && numericValue > 0) return numericValue
+
+  if (typeof raw === 'string') {
+    const parsedValue = Date.parse(raw)
+    if (Number.isFinite(parsedValue) && parsedValue > 0) return parsedValue
+  }
+
+  return 0
 }
 
 function hasScheduledDue(card) {
@@ -450,12 +476,21 @@ function isUnseenStudyCard(card, seenIds) {
 
 function sortReviewQueue(cards, now = Date.now()) {
   const tieSeed = todayKey()
+  const todayStart = startOfDayTimestamp(now)
   return [...cards].sort((a, b) => {
     const aState = inferReviewState(a)
     const bState = inferReviewState(b)
     if (aState.level !== bState.level) return bState.level - aState.level
 
     if (aState.level === 0) {
+      const aDueTime = dueTimestamp(a, now)
+      const bDueTime = dueTimestamp(b, now)
+      const aReviewedToday = optionalTimestamp(a.lastReviewedAt) >= todayStart || (hasScheduledDue(a) && aDueTime >= todayStart)
+      const bReviewedToday = optionalTimestamp(b.lastReviewedAt) >= todayStart || (hasScheduledDue(b) && bDueTime >= todayStart)
+
+      if (aReviewedToday !== bReviewedToday) return aReviewedToday ? -1 : 1
+      if (aReviewedToday && aDueTime !== bDueTime) return aDueTime - bDueTime
+
       const repsDiff = totalSiteReps(b) - totalSiteReps(a)
       if (repsDiff) return repsDiff
     }
@@ -1732,7 +1767,8 @@ export default function App() {
     return activeCards.filter(c => ids.has(c.id))
   }, [activeCards, focusedCardIds])
   const todayNewCards = dailyNewCardCount(stats, todayKey())
-  const remainingNewToday = Math.max(0, Number(config.newDailyGoal || 0) - todayNewCards)
+  const newDailyGoal = configuredNewDailyGoal(config)
+  const remainingNewToday = Math.max(0, newDailyGoal - todayNewCards)
   const seenCardIds = useMemo(() => historyCardIds(stats), [stats.history])
   const reviewStreakForNewRatio = useMemo(() => reviewRatioStreak(stats), [stats.history])
   const dueRefreshKey = Math.floor(Date.now() / 30000)
@@ -2081,13 +2117,15 @@ export default function App() {
   }
 
   function scheduleCard(card, grade) {
+    const now = Date.now()
+    const reviewedAt = new Date(now).toISOString()
     const nextSchedule = previewSchedule(card, grade)
     const isCorrectGrade = grade === 'good' || grade === 'easy'
     const previousAttempts = Math.max(Number(card.reviewAttempts || 0), Number(card.siteReps || 0))
 
     return {
       ...card,
-      dueAt: Date.now() + nextSchedule.delay,
+      dueAt: now + nextSchedule.delay,
       reps: Number(card.reps || 0),
       siteReps: Number(card.siteReps || 0) + 1,
       reviewAttempts: previousAttempts + 1,
@@ -2097,7 +2135,9 @@ export default function App() {
       reviewLevel: nextSchedule.level,
       stageProgress: nextSchedule.progress,
       lastGrade: grade,
-      lastIntervalMs: nextSchedule.delay
+      lastIntervalMs: nextSchedule.delay,
+      lastReviewedAt: reviewedAt,
+      firstReviewedAt: card.firstReviewedAt || reviewedAt
     }
   }
 
@@ -2197,6 +2237,23 @@ export default function App() {
       ? cards.map(c => c.id === pendingGrade.cardId ? scheduleCard(c, pendingGrade.grade) : c)
       : cards
     const syncedCard = pendingGrade ? updatedCards.find(c => c.id === pendingGrade.cardId) : null
+    const statsForQueue = pendingGrade
+      ? {
+          ...safeStats(stats),
+          history: [
+            ...(safeStats(stats).history || []),
+            {
+              id: pendingGrade.cardId,
+              isNewCard: pendingGrade.isNewCard || false,
+              day: todayKey(),
+              date: pendingGrade.answeredAt || new Date().toISOString()
+            }
+          ].slice(-500)
+        }
+      : safeStats(stats)
+    const seenIdsForQueue = historyCardIds(statsForQueue)
+    const reviewStreakForQueue = reviewRatioStreak(statsForQueue)
+    const remainingNewForQueue = Math.max(0, configuredNewDailyGoal(config) - dailyNewCardCount(statsForQueue, todayKey()))
 
     const focusedIds = new Set(focusedCardIds)
     let shouldClearFocus = false
@@ -2238,7 +2295,7 @@ export default function App() {
 
     const sortedDue = focusedIds.size
       ? sortDueQueue(freshDue)
-      : buildStudyQueue(freshPool, seenCardIds, remainingNewToday > 0, Date.now(), reviewStreakForNewRatio)
+      : buildStudyQueue(freshPool, seenIdsForQueue, remainingNewForQueue > 0, Date.now(), reviewStreakForQueue)
 
     const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
 
@@ -3277,7 +3334,7 @@ export default function App() {
           </p>
           <div className="settings-grid">
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
-            <label>Meta de inéditos/dia<input type="number" min="0" value={config.newDailyGoal || 0} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
+            <label>Meta de inéditos/dia<input type="number" min="1" value={configuredNewDailyGoal(config)} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
           </div>
         </section>
       )}
