@@ -48,13 +48,15 @@ function headers(authorization) {
 }
 
 function cardPayload(userId, card) {
+  const htmlFront = card.htmlFront || card.html_front || ''
+  const htmlBack = card.htmlBack || card.html_back || ''
   return {
     user_id: userId,
     card_id: String(card.id),
     pergunta: card.pergunta || '',
     resposta: card.resposta || '',
-    html_front: card.htmlFront || '',
-    html_back: card.htmlBack || '',
+    html_front: htmlFront,
+    html_back: htmlBack,
     tags: card.tags || '',
     due_at: card.dueAt ? new Date(card.dueAt).toISOString() : null,
     review_level: Number(card.reviewLevel || 0),
@@ -64,7 +66,7 @@ function cardPayload(userId, card) {
     review_wrong: Number(card.reviewWrong || 0),
     suspended: !!card.suspended,
     deleted: !!card.deleted,
-    payload: card,
+    payload: { ...card, htmlFront, htmlBack },
     updated_at: new Date().toISOString()
   }
 }

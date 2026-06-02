@@ -1272,23 +1272,28 @@ function imageTags(html) {
   return String(html || '').match(/<img\b[^>]*>/gi) || []
 }
 
+function imageSrc(img) {
+  return img.match(/src=["']([^"']+)["']/i)?.[1] || ''
+}
+
+function isRestorableImage(img) {
+  const src = imageSrc(img)
+  return src && (/^data:image\//i.test(src) || /^media\//i.test(src) || /^\/media\//i.test(src) || /^blob:/i.test(src))
+}
+
 function mergeMissingImages(existingHtml, importedHtml) {
-  const importedImages = imageTags(importedHtml)
+  const importedImages = imageTags(importedHtml).filter(isRestorableImage)
   if (!importedImages.length) return existingHtml
 
   const existing = String(existingHtml || '')
-  const existingImages = imageTags(existing)
-  const hasBrokenBlob = /src=["']blob:/i.test(existing)
-  if (!existingImages.length || hasBrokenBlob) {
-    return `${existing}<br>${importedImages.join('<br>')}`
-  }
+  const baseHtml = existing.replace(/<img\b[^>]*>/gi, img => (isRestorableImage(img) ? img : ''))
 
   const missingImages = importedImages.filter(img => {
-    const src = img.match(/src=["']([^"']+)["']/i)?.[1]
-    return src && !existing.includes(src)
+    const src = imageSrc(img)
+    return src && !baseHtml.includes(src)
   })
 
-  return missingImages.length ? `${existing}<br>${missingImages.join('<br>')}` : existing
+  return missingImages.length ? `${baseHtml}<br>${missingImages.join('<br>')}` : baseHtml
 }
 
 function mergeImportedCards(oldCards, importedCards) {
@@ -1316,6 +1321,34 @@ function mergeImportedCards(oldCards, importedCards) {
     if (existing) {
       ignoredExisting += 1
       if (existing.manualEditedAt) preservedEdited += 1
+      const existingFront = existing.htmlFront || existing.html_front || ''
+      const existingBack = existing.htmlBack || existing.html_back || ''
+      const importedFront = nextCard.htmlFront || nextCard.html_front || ''
+      const importedBack = nextCard.htmlBack || nextCard.html_back || ''
+      const htmlFront = mergeMissingImages(existingFront, importedFront)
+      const htmlBack = mergeMissingImages(existingBack, importedBack)
+      const mediaCount = Math.max(Number(existing.mediaCount || 0), Number(nextCard.mediaCount || 0))
+      const changed = htmlFront !== existingFront || htmlBack !== existingBack || mediaCount !== Number(existing.mediaCount || 0)
+
+      if (changed) {
+        const index = merged.findIndex(c => String(c.id) === String(existing.id))
+        if (index >= 0) {
+          const updatedCard = {
+            ...existing,
+            htmlFront,
+            htmlBack,
+            html_front: htmlFront,
+            html_back: htmlBack,
+            mediaCount,
+            importKey: existing.importKey || contentKey,
+            originalImportKey: existing.originalImportKey || contentKey,
+            sourceUpdatedAt: existing.sourceUpdatedAt || importedAt
+          }
+          merged[index] = updatedCard
+          createdCards.push(updatedCard)
+          updated += 1
+        }
+      }
       return
     }
 
