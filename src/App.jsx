@@ -58,10 +58,10 @@ const supabase = createClient(
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
 const DEFAULT_FSRS_RETENTION = 0.91
-const LEARNING_RESET_VERSION = 'ladder-reset-2026-06-02-v2'
+const LEARNING_RESET_VERSION = 'ladder-reset-2026-06-02-v3'
 const LEARNING_STEPS = [
-  { level: 0, label: 'Treino inicial', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
-  { level: 1, label: 'Treino inicial', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
+  { level: 0, label: '10 minutos', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
+  { level: 1, label: '10 minutos', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
   { level: 2, label: '1 dia', delayMs: DAY, scheduledDays: 1 },
   { level: 3, label: '3 dias', delayMs: 3 * DAY, scheduledDays: 3 },
   { level: 4, label: '7 dias', delayMs: 7 * DAY, scheduledDays: 7 },
@@ -501,14 +501,19 @@ function reviewStageDetails(card) {
     : hasScheduledDue(card)
       ? `volta em ${new Date(dueTimestamp(card)).toLocaleString('pt-BR')}`
       : 'sem data'
-  const progress = level >= MASTERED_LEVEL
-    ? '6 acertos consolidados. Nao volta automaticamente.'
-    : `${Math.min(level, 6)}/6 acertos da escada | ${nextReview}`
+  let progress = ''
+  if (level >= MASTERED_LEVEL) {
+    progress = '6 acertos consolidados. Nao volta automaticamente.'
+  } else if (level <= 1) {
+    progress = `${level}/2 acertos para chegar em 1 dia | ${nextReview}`
+  } else {
+    progress = `${Math.min(level - 1, 5)}/5 etapas de consolidacao | ${nextReview}`
+  }
 
   return {
     level,
     label: level >= MASTERED_LEVEL ? 'Aprendido' : step.label,
-    className: level >= MASTERED_LEVEL ? 'stage-learned' : `stage-level-${level}`,
+    className: level >= MASTERED_LEVEL ? 'stage-learned' : level <= 1 ? 'stage-level-10m' : `stage-level-${level}`,
     progress
   }
 }
@@ -2209,7 +2214,7 @@ export default function App() {
   const todayDone = dailyUniqueCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
-  const seenDeckCount = activeCards.filter(card => seenCardIds.has(card.id) || hasReviewHistory(card)).length
+  const seenDeckCount = activeCards.filter(card => seenCardIds.has(card.id)).length
   const seenDeckPercent = activeCards.length ? Math.round((seenDeckCount / activeCards.length) * 100) : 0
   const exposurePercent = activeCards.length ? Math.round((totalAnswered / activeCards.length) * 100) : 0
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
@@ -2219,7 +2224,7 @@ export default function App() {
     const cardMastery = stats.masteryByCard?.[card.id] || {}
     return Number(cardMastery.lastPercent ?? cardMastery.bestPercent ?? 0)
   })
-  const masteredCount = masteryEntries.filter(value => value >= 80).length
+  const masteredCount = activeCards.filter(card => learningLevel(card) >= MASTERED_LEVEL).length
   const partialCount = masteryEntries.filter(value => value >= 60 && value < 80).length
   const weakCount = Math.max(0, activeCards.length - masteredCount - partialCount)
   const recentHistory = (stats.history || []).slice(-50)
