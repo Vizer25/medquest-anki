@@ -57,8 +57,20 @@ const supabase = createClient(
 )
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
-const FSRS_REVIEW_PAUSE_NEW_THRESHOLD = 60
 const DEFAULT_FSRS_RETENTION = 0.91
+const LEARNING_RESET_VERSION = 'ladder-reset-2026-06-02'
+const LEARNING_STEPS = [
+  { level: 0, label: 'Treino inicial', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
+  { level: 1, label: 'Treino inicial', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
+  { level: 2, label: '1 dia', delayMs: DAY, scheduledDays: 1 },
+  { level: 3, label: '3 dias', delayMs: 3 * DAY, scheduledDays: 3 },
+  { level: 4, label: '7 dias', delayMs: 7 * DAY, scheduledDays: 7 },
+  { level: 5, label: '15 dias', delayMs: 15 * DAY, scheduledDays: 15 },
+  { level: 6, label: '30 dias', delayMs: 30 * DAY, scheduledDays: 30 },
+  { level: 7, label: 'Aprendido', delayMs: null, scheduledDays: 0 }
+]
+const MASTERED_LEVEL = LEARNING_STEPS.length - 1
+const NEW_REVIEW_RATIO = 1
 
 function normalizedRetention(value = DEFAULT_FSRS_RETENTION) {
   const parsed = Number(value)
@@ -299,7 +311,80 @@ function fsrsSchedulePreview(card, grade, now = Date.now(), retention = DEFAULT_
 }
 
 function isCardDue(card, now = Date.now()) {
+  if (card?.learnedAt || learningLevel(card) >= MASTERED_LEVEL) return false
   return !card?.dueAt || dueTimestamp(card, now) <= now
+}
+
+function learningLevel(card) {
+  if (!card) return 0
+  if (card.learnedAt) return MASTERED_LEVEL
+  const raw = card.learningLevel ?? card.reviewLevel
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return 0
+  return Math.max(0, Math.min(MASTERED_LEVEL, parsed))
+}
+
+function learningStep(level) {
+  return LEARNING_STEPS[Math.max(0, Math.min(MASTERED_LEVEL, Number(level) || 0))] || LEARNING_STEPS[0]
+}
+
+function scheduleByLearningLadder(card, grade, now = Date.now()) {
+  const isCorrectGrade = grade === 'good' || grade === 'easy'
+  const currentLevel = learningLevel(card)
+  const nextLevel = isCorrectGrade
+    ? Math.min(MASTERED_LEVEL, currentLevel + 1)
+    : Math.max(0, currentLevel - 1)
+  const step = learningStep(nextLevel)
+  const dueAt = step.delayMs == null ? now + (3650 * DAY) : now + step.delayMs
+
+  return {
+    level: nextLevel,
+    label: step.label,
+    dueAt,
+    intervalMs: step.delayMs == null ? 3650 * DAY : step.delayMs,
+    intervalDays: step.scheduledDays,
+    learned: nextLevel >= MASTERED_LEVEL
+  }
+}
+
+function resetCardLearning(card, now = Date.now()) {
+  const {
+    fsrsDue,
+    fsrsState,
+    fsrsLastReview,
+    fsrsIntervalDays,
+    fsrsScheduledDays,
+    fsrsElapsedDays,
+    fsrsLearningSteps,
+    fsrsDifficulty,
+    fsrsStability,
+    fsrsReps,
+    fsrsLapses,
+    fsrsHistory,
+    learnedAt,
+    firstReviewedAt,
+    lastReviewedAt,
+    lastIntervalMs,
+    lastGrade,
+    learningStartedAt,
+    ...rest
+  } = card || {}
+
+  return {
+    ...rest,
+    dueAt: now,
+    reps: 0,
+    siteReps: 0,
+    reviewAttempts: 0,
+    reviewCorrect: 0,
+    reviewWrong: 0,
+    correctCount: 0,
+    reviewLevel: 0,
+    stageProgress: 0,
+    learningLevel: 0,
+    interval: 0,
+    learningResetAt: new Date(now).toISOString()
+  }
 }
 
 function sortDueQueue(cards, now = Date.now()) {
@@ -355,15 +440,14 @@ function inferReviewState(card) {
 }
 
 function previewSchedule(card, grade, retention = DEFAULT_FSRS_RETENTION) {
-  const next = fsrsSchedulePreview(card, grade, Date.now(), retention)
+  const ladder = scheduleByLearningLadder(card, grade, Date.now())
   return {
-    level: next.card.state,
-    progress: next.card.learning_steps || 0,
-    delay: next.delay,
-    label: fsrsStateLabel(next.card.state),
-    correctCount: Number(card?.correctCount || 0) + (fsrsRatingFromGrade(grade) === Rating.Good ? 1 : 0),
-    fsrsCard: next.card,
-    fsrsLog: next.log
+    level: ladder.level,
+    progress: ladder.level,
+    delay: ladder.intervalMs,
+    label: ladder.label,
+    correctCount: Number(card?.correctCount || 0) + ((grade === 'good' || grade === 'easy') ? 1 : 0),
+    ladder
   }
 }
 
@@ -407,28 +491,31 @@ function reviewStageDetails(card) {
     }
   }
 
-  const state = fsrsStateFromCard(card)
-  const scheduledDays = Math.max(0, Number(card?.fsrsScheduledDays || card?.interval || 0))
-  const label = fsrsStateLabel(state)
-  const stability = Number(card?.fsrsStability || 0)
-  const difficulty = Number(card?.fsrsDifficulty || 0)
-  const progressParts = []
-  if (scheduledDays > 0) progressParts.push(`Intervalo FSRS: ${scheduledDays}d`)
-  if (stability || difficulty) progressParts.push(`Estabilidade ${stability.toFixed(1)} | Dificuldade ${difficulty.toFixed(1)}`)
-  const progress = progressParts.join(' | ') || fsrsStateLabel(state)
+  const level = learningLevel(card)
+  const step = learningStep(level)
+  const nextReview = isCardDue(card)
+    ? 'vence agora'
+    : hasScheduledDue(card)
+      ? `volta em ${new Date(dueTimestamp(card)).toLocaleString('pt-BR')}`
+      : 'sem data'
+  const progress = level >= MASTERED_LEVEL
+    ? '6 acertos consolidados. Nao volta automaticamente.'
+    : `${Math.min(level, 6)}/6 acertos da escada | ${nextReview}`
 
   return {
-    level: state,
-    label,
-    className: `stage-${state}`,
+    level,
+    label: level >= MASTERED_LEVEL ? 'Aprendido' : step.label,
+    className: level >= MASTERED_LEVEL ? 'stage-learned' : `stage-level-${level}`,
     progress
   }
 }
 
 function reviewCategoryKey(card) {
   if (!hasReviewHistory(card)) return 'new'
-  const state = fsrsStateFromCard(card)
-  return state === State.New ? 'new' : String(state)
+  const level = learningLevel(card)
+  if (level >= MASTERED_LEVEL) return 'learned'
+  if (level <= 1) return 'level-10m'
+  return `level-${level}`
 }
 
 function sortCardsByDifficulty(a, b, metricsByCard = new Map()) {
@@ -527,23 +614,41 @@ function fsrsReviewPriority(card) {
   return 2
 }
 
+function cardReviewedDay(card) {
+  const raw = card?.lastReviewedAt || card?.fsrsLastReview || ''
+  if (!raw) return ''
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime())) return String(raw).slice(0, 10)
+  return dateKey(parsed)
+}
+
+function reviewPriorityBucket(card) {
+  const level = learningLevel(card)
+  const isTenMinuteStep = level <= 1
+  if (isTenMinuteStep && cardReviewedDay(card) === todayKey()) return 0
+  if (level >= 2) return 1
+  return 2
+}
+
 function sortReviewQueue(cards, now = Date.now()) {
-  const tieSeed = todayKey()
+  const daySeed = todayKey()
   return [...cards].sort((a, b) => {
-    const aPriority = fsrsReviewPriority(a)
-    const bPriority = fsrsReviewPriority(b)
-    if (aPriority !== bPriority) return aPriority - bPriority
+    const aBucket = reviewPriorityBucket(a)
+    const bBucket = reviewPriorityBucket(b)
+    if (aBucket !== bBucket) return aBucket - bBucket
+
+    const aLevel = learningLevel(a)
+    const bLevel = learningLevel(b)
+    if (aBucket === 1 && aLevel !== bLevel) return bLevel - aLevel
 
     const aTime = dueTimestamp(a, now)
     const bTime = dueTimestamp(b, now)
     if (aTime !== bTime) return aTime - bTime
 
-    if (aPriority === 1) {
-      const repsDiff = totalSiteReps(b) - totalSiteReps(a)
-      if (repsDiff) return repsDiff
-    }
+    const repsDiff = totalSiteReps(b) - totalSiteReps(a)
+    if (repsDiff) return repsDiff
 
-    return hashString(`${a.id}-${tieSeed}`) - hashString(`${b.id}-${tieSeed}`)
+    return hashString(`${a.id}-${daySeed}`) - hashString(`${b.id}-${daySeed}`)
   })
 }
 
@@ -558,15 +663,13 @@ function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now(), rec
     now
   )
 
-  const pauseNewCards = reviews.length >= FSRS_REVIEW_PAUSE_NEW_THRESHOLD
-
-  if (!shouldPullUnseen || pauseNewCards || !unseen.length) return reviews
+  if (!shouldPullUnseen || !unseen.length) return reviews
   if (!reviews.length) return unseen
 
   const queue = []
   let reviewIndex = 0
   let unseenIndex = 0
-  let reviewQuota = Math.max(0, 2 - Math.min(2, recentReviewStreak))
+  let reviewQuota = Math.max(0, NEW_REVIEW_RATIO - Math.min(NEW_REVIEW_RATIO, recentReviewStreak))
 
   while (reviewIndex < reviews.length || unseenIndex < unseen.length) {
     for (let count = 0; count < reviewQuota && reviewIndex < reviews.length; count += 1) {
@@ -577,7 +680,7 @@ function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now(), rec
       queue.push(unseen[unseenIndex])
       unseenIndex += 1
     }
-    reviewQuota = 2
+    reviewQuota = NEW_REVIEW_RATIO
     if (reviewIndex >= reviews.length) {
       while (unseenIndex < unseen.length) {
         queue.push(unseen[unseenIndex])
@@ -1996,6 +2099,50 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (!ready || !logged) return
+
+    let alreadyReset = false
+    try {
+      alreadyReset = localStorage.getItem('mq_learning_reset_version') === LEARNING_RESET_VERSION
+    } catch {
+      alreadyReset = false
+    }
+    if (alreadyReset) return
+
+    const now = Date.now()
+    const resetAt = new Date(now).toISOString()
+    const resetCards = cards.map(card => resetCardLearning(card, now))
+    const resetStats = {
+      ...DEFAULT_STATS,
+      learningResetAt: resetAt
+    }
+
+    setCards(resetCards)
+    setStats(resetStats)
+    setAnswer('')
+    setFeedback(null)
+    setPendingGrade(null)
+    setFocusedCardIds([])
+    setCurrentCardId('')
+    setIndex(0)
+    setSyncStatus('Escada de aprendizado iniciada hoje. Todos os cards voltaram para ineditos.')
+
+    try {
+      localStorage.setItem('mq_learning_reset_version', LEARNING_RESET_VERSION)
+      localStorage.setItem('mq_cards', JSON.stringify(resetCards))
+      localStorage.setItem('mq_stats', JSON.stringify(resetStats))
+    } catch (err) {
+      console.warn('Nao foi possivel salvar reset local completo.', err)
+    }
+
+    if (user && sessionToken) {
+      syncCardsInChunks(resetCards, 'Deck reiniciado na escada', user, sessionToken)
+      saveProfileThroughProxy(user, sessionToken, undefined, resetStats)
+        .catch(err => console.warn('Nao foi possivel salvar estatisticas reiniciadas agora.', err))
+    }
+  }, [ready, logged])
+
+  useEffect(() => {
     if (!importLog) return
     const timeout = window.setTimeout(() => setImportLog(''), 9000)
     return () => window.clearTimeout(timeout)
@@ -2029,7 +2176,7 @@ export default function App() {
     const dueBase = base.filter(c => isCardDue(c, now))
     const due = focusedCards.length
       ? sortDueQueue(dueBase, now)
-      : buildStudyQueue(base, seenCardIds, remainingNewToday > 0, now, reviewStreakForNewRatio)
+      : buildStudyQueue(base, seenCardIds, true, now, reviewStreakForNewRatio)
 
     if (focusedCards.length && !due.length) {
       const fallbackBase = activeCards.filter(c =>
@@ -2037,11 +2184,11 @@ export default function App() {
         !c.suspended &&
         (!studyTag || String(c.tags || '').split(/\s+/).includes(studyTag))
       )
-      return buildStudyQueue(fallbackBase, seenCardIds, remainingNewToday > 0, now, reviewStreakForNewRatio)
+      return buildStudyQueue(fallbackBase, seenCardIds, true, now, reviewStreakForNewRatio)
     }
 
     return due
-  }, [activeCards, focusedCards, studyTag, dueRefreshKey, remainingNewToday, seenCardIds, reviewStreakForNewRatio])
+  }, [activeCards, focusedCards, studyTag, dueRefreshKey, seenCardIds, reviewStreakForNewRatio])
   const answeredCardId = pendingGrade?.cardId || feedback?.cardId || ''
   const queuedCurrent = dueCards.length ? dueCards[index % dueCards.length] : null
   const answeredCurrent = answeredCardId ? activeCards.find(card => card.id === answeredCardId) : null
@@ -2112,9 +2259,13 @@ export default function App() {
     const counts = {
       all: libraryBaseCards.length,
       new: 0,
-      [String(State.Learning)]: 0,
-      [String(State.Relearning)]: 0,
-      [String(State.Review)]: 0
+      'level-10m': 0,
+      'level-2': 0,
+      'level-3': 0,
+      'level-4': 0,
+      'level-5': 0,
+      'level-6': 0,
+      learned: 0
     }
     libraryBaseCards.forEach(card => {
       const key = reviewCategoryKey(card)
@@ -2123,11 +2274,15 @@ export default function App() {
     return counts
   }, [libraryBaseCards])
   const reviewCategoryOptions = [
-    { key: 'all', label: 'Todos' },
-    { key: 'new', label: 'Ineditos' },
-    { key: String(State.Learning), label: 'Aprendizado' },
-    { key: String(State.Relearning), label: 'Reaprendizado' },
-    { key: String(State.Review), label: 'Revisao FSRS' }
+    { key: 'all', label: 'Todos', className: 'stage-all' },
+    { key: 'new', label: 'Ineditos', className: 'stage-new' },
+    { key: 'level-10m', label: '10 minutos', className: 'stage-level-10m' },
+    { key: 'level-2', label: '1 dia', className: 'stage-level-2' },
+    { key: 'level-3', label: '3 dias', className: 'stage-level-3' },
+    { key: 'level-4', label: '7 dias', className: 'stage-level-4' },
+    { key: 'level-5', label: '15 dias', className: 'stage-level-5' },
+    { key: 'level-6', label: '30 dias', className: 'stage-level-6' },
+    { key: 'learned', label: 'Aprendidos', className: 'stage-learned' }
   ]
   const filteredCards = useMemo(() => {
     return libraryBaseCards
@@ -2391,50 +2546,37 @@ export default function App() {
   function scheduleCard(card, grade) {
     const now = Date.now()
     const reviewedAt = new Date(now).toISOString()
-    const nextSchedule = previewSchedule(card, grade, config.fsrsRetention)
-    const fsrsCard = nextSchedule.fsrsCard
-    const isCorrectGrade = fsrsRatingFromGrade(grade) === Rating.Good
+    const nextSchedule = scheduleByLearningLadder(card, grade, now)
+    const isCorrectGrade = grade === 'good' || grade === 'easy'
     const previousAttempts = Math.max(Number(card.reviewAttempts || 0), Number(card.siteReps || 0))
-    const intervalMs = Math.max(0, fsrsCard.due.getTime() - now)
-    const fsrsHistory = Array.isArray(card.fsrsHistory) ? card.fsrsHistory : []
-    const fsrsHistoryItem = {
+    const learningHistory = Array.isArray(card.learningHistory) ? card.learningHistory : []
+    const learningHistoryItem = {
       date: reviewedAt,
       rating: isCorrectGrade ? 'good' : 'again',
-      state: fsrsCard.state,
-      dueAt: fsrsCard.due.toISOString(),
-      intervalDays: fsrsCard.scheduled_days,
-      difficulty: fsrsCard.difficulty,
-      stability: fsrsCard.stability
+      level: nextSchedule.level,
+      dueAt: new Date(nextSchedule.dueAt).toISOString(),
+      intervalDays: nextSchedule.intervalDays
     }
 
     return {
       ...card,
-      dueAt: fsrsCard.due.getTime(),
-      fsrsDue: fsrsCard.due.toISOString(),
-      fsrsState: fsrsCard.state,
-      fsrsLastReview: reviewedAt,
-      fsrsIntervalDays: fsrsCard.scheduled_days,
-      fsrsScheduledDays: fsrsCard.scheduled_days,
-      fsrsElapsedDays: fsrsCard.elapsed_days,
-      fsrsLearningSteps: fsrsCard.learning_steps,
-      fsrsDifficulty: fsrsCard.difficulty,
-      fsrsStability: fsrsCard.stability,
-      fsrsReps: fsrsCard.reps,
-      fsrsLapses: fsrsCard.lapses,
-      fsrsHistory: [...fsrsHistory, fsrsHistoryItem].slice(-500),
+      dueAt: nextSchedule.dueAt,
+      learnedAt: nextSchedule.learned ? reviewedAt : '',
+      learningLevel: nextSchedule.level,
+      learningHistory: [...learningHistory, learningHistoryItem].slice(-500),
       reps: Number(card.reps || 0),
       siteReps: Number(card.siteReps || 0) + 1,
       reviewAttempts: previousAttempts + 1,
       reviewCorrect: Number(card.reviewCorrect || 0) + (isCorrectGrade ? 1 : 0),
       reviewWrong: Number(card.reviewWrong || 0) + (isCorrectGrade ? 0 : 1),
-      correctCount: nextSchedule.correctCount,
+      correctCount: Number(card.correctCount || 0) + (isCorrectGrade ? 1 : 0),
       reviewLevel: nextSchedule.level,
-      stageProgress: nextSchedule.progress,
+      stageProgress: nextSchedule.level,
       lastGrade: grade,
-      lastIntervalMs: intervalMs,
+      lastIntervalMs: nextSchedule.intervalMs,
       lastReviewedAt: reviewedAt,
       firstReviewedAt: card.firstReviewedAt || reviewedAt,
-      interval: fsrsCard.scheduled_days
+      interval: nextSchedule.intervalDays
     }
   }
 
@@ -2550,7 +2692,6 @@ export default function App() {
       : safeStats(stats)
     const seenIdsForQueue = historyCardIds(statsForQueue)
     const reviewStreakForQueue = reviewRatioStreak(statsForQueue)
-    const remainingNewForQueue = Math.max(0, configuredNewDailyGoal(config) - dailyNewCardCount(statsForQueue, todayKey()))
 
     const focusedIds = new Set(focusedCardIds)
     let shouldClearFocus = false
@@ -2592,7 +2733,7 @@ export default function App() {
 
     const sortedDue = focusedIds.size
       ? sortDueQueue(freshDue)
-      : buildStudyQueue(freshPool, seenIdsForQueue, remainingNewForQueue > 0, Date.now(), reviewStreakForQueue)
+      : buildStudyQueue(freshPool, seenIdsForQueue, true, Date.now(), reviewStreakForQueue)
 
     const alternatives = current ? sortedDue.filter(card => card.id !== current.id) : sortedDue
 
@@ -2608,8 +2749,9 @@ export default function App() {
   }
 
   function resetAll() {
-    setStats(DEFAULT_STATS)
-    setCards(cards.map(c => ({ ...c, dueAt: Date.now(), reps: 0 })))
+    const now = Date.now()
+    setStats({ ...DEFAULT_STATS, learningResetAt: new Date(now).toISOString() })
+    setCards(cards.map(c => resetCardLearning(c, now)))
     setSiteSeconds(0)
     setCardSeconds(0)
     setIndex(0)
@@ -3391,7 +3533,7 @@ export default function App() {
               <button
                 key={option.key}
                 type="button"
-                className={`${cardStageFilter === option.key ? 'active ' : ''}${option.key === 'all' ? 'stage-all' : option.key === 'new' ? 'stage-new' : `stage-${option.key}`}`}
+                className={`${cardStageFilter === option.key ? 'active ' : ''}${option.className}`}
                 onClick={() => setCardStageFilter(option.key)}
               >
                 <span>{option.label}</span>
@@ -3630,15 +3772,15 @@ export default function App() {
 
       {tab === 'settings' && (
         <section className="card">
-          <h2>Configuracoes FSRS</h2>
+          <h2>Escada de aprendizado</h2>
           <p className="hint">
-            FSRS ativo com retencao desejada de {Math.round(normalizedRetention(config.fsrsRetention) * 100)}%.
-            A fila prioriza cards vencidos e em aprendizado/reaprendizado; quando controlada, intercala 2 revisoes para 1 inedito.
+            Fila ativa em proporcao 1 revisao para 1 inedito enquanto houver cards novos.
+            Acertos sobem a escada: 10 min, 10 min, 1 dia, 3 dias, 7 dias, 15 dias, 30 dias e aprendido.
+            Erros descem um degrau.
           </p>
           <div className="settings-grid">
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
             <label>Meta de inéditos/dia<input type="number" min="1" value={configuredNewDailyGoal(config)} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
-            <label>Retencao FSRS (%)<input type="number" min="70" max="99" value={Math.round(normalizedRetention(config.fsrsRetention) * 100)} onChange={e=>setConfig({...config, fsrsRetention: normalizedRetention(Number(e.target.value) / 100)})}/></label>
           </div>
         </section>
       )}

@@ -401,7 +401,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 }
 .stage-filter{
   display:grid;
-  grid-template-columns:repeat(6,minmax(0,1fr));
+  grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
   gap:10px;
   margin:4px 0 14px;
 }
@@ -433,6 +433,15 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .stage-filter .stage-1.active{color:#b54708;background:#fffaeb}
 .stage-filter .stage-2.active{color:#2f5bea;background:#eef4ff}
 .stage-filter .stage-3.active{color:#067647;background:#ecfdf3}
+.stage-filter .stage-level-0.active,.review-stage-chip.stage-level-0{color:#b42318;background:#fff1f3;border-color:#fecdca}
+.stage-filter .stage-level-1.active,.review-stage-chip.stage-level-1{color:#c2410c;background:#fff7ed;border-color:#fed7aa}
+.stage-filter .stage-level-10m.active{color:#b42318;background:#fff1f3;border-color:#fecdca}
+.stage-filter .stage-level-2.active,.review-stage-chip.stage-level-2{color:#b54708;background:#fffaeb;border-color:#fedf89}
+.stage-filter .stage-level-3.active,.review-stage-chip.stage-level-3{color:#2f5bea;background:#eef4ff;border-color:#c7d7fe}
+.stage-filter .stage-level-4.active,.review-stage-chip.stage-level-4{color:#175cd3;background:#eff8ff;border-color:#b2ddff}
+.stage-filter .stage-level-5.active,.review-stage-chip.stage-level-5{color:#6941c6;background:#f4f3ff;border-color:#d9d6fe}
+.stage-filter .stage-level-6.active,.review-stage-chip.stage-level-6{color:#067647;background:#ecfdf3;border-color:#abefc6}
+.stage-filter .stage-learned.active,.review-stage-chip.stage-learned{color:#05603a;background:#d1fadf;border-color:#6ce9a6}
 .library-sort{
   display:flex;
   flex-wrap:wrap;
