@@ -58,7 +58,7 @@ const supabase = createClient(
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
 const DEFAULT_FSRS_RETENTION = 0.91
-const LEARNING_RESET_VERSION = 'ladder-reset-2026-06-02'
+const LEARNING_RESET_VERSION = 'ladder-reset-2026-06-02-v2'
 const LEARNING_STEPS = [
   { level: 0, label: 'Treino inicial', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
   { level: 1, label: 'Treino inicial', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
@@ -367,6 +367,9 @@ function resetCardLearning(card, now = Date.now()) {
     lastIntervalMs,
     lastGrade,
     learningStartedAt,
+    learningHistory,
+    learningLevel,
+    learningResetAt,
     ...rest
   } = card || {}
 
@@ -652,11 +655,17 @@ function sortReviewQueue(cards, now = Date.now()) {
   })
 }
 
+function sortUnseenQueue(cards) {
+  const seed = todayKey()
+  return [...cards].sort((a, b) => {
+    return hashString(`unseen-${seed}-${a.id}`) - hashString(`unseen-${seed}-${b.id}`)
+  })
+}
+
 function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now(), recentReviewStreak = 0) {
   const unseenCandidates = cards.filter(card => isUnseenStudyCard(card, seenIds))
-  const unseen = sortDueQueue(
-    shouldPullUnseen ? unseenCandidates : unseenCandidates.filter(card => isCardDue(card, now)),
-    now
+  const unseen = sortUnseenQueue(
+    shouldPullUnseen ? unseenCandidates : unseenCandidates.filter(card => isCardDue(card, now))
   )
   const reviews = sortReviewQueue(
     cards.filter(card => !isUnseenStudyCard(card, seenIds) && isCardDue(card, now)),
