@@ -1441,6 +1441,45 @@ function shouldShowLibraryFrontPreview(card) {
   return normalize(stripHtml(html)) !== normalize(card?.pergunta || '')
 }
 
+function removeImageFallbackText(html) {
+  return String(html || '').replace(/<img\b[^>]*>/gi, tag => {
+    let next = tag
+      .replace(/\s+alt=(["'])[\s\S]*?\1/gi, '')
+      .replace(/\s+title=(["'])[\s\S]*?\1/gi, '')
+    return next.replace(/<img\b/i, '<img alt=""')
+  })
+}
+
+function hideBrokenImages(container) {
+  container?.querySelectorAll('img').forEach(img => {
+    img.alt = ''
+    img.removeAttribute('title')
+
+    const hideIfBroken = () => {
+      if (img.complete && img.naturalWidth === 0) img.hidden = true
+    }
+
+    img.addEventListener('error', () => {
+      img.hidden = true
+    }, { once: true })
+    img.addEventListener('load', () => {
+      img.hidden = false
+    }, { once: true })
+    hideIfBroken()
+  })
+}
+
+function HtmlContent({ html, className }) {
+  const contentRef = useRef(null)
+  const safeHtml = useMemo(() => removeImageFallbackText(html), [html])
+
+  useEffect(() => {
+    hideBrokenImages(contentRef.current)
+  }, [safeHtml])
+
+  return <div ref={contentRef} className={className} dangerouslySetInnerHTML={{ __html: safeHtml }} />
+}
+
 function RichTextEditor({ value, onChange }) {
   const editorRef = useRef(null)
   const lastHtmlRef = useRef(null)
@@ -1464,8 +1503,10 @@ function RichTextEditor({ value, onChange }) {
 
   useEffect(() => {
     if (!editorRef.current || value === lastHtmlRef.current) return
-    editorRef.current.innerHTML = value || ''
-    lastHtmlRef.current = value || ''
+    const nextHtml = removeImageFallbackText(value)
+    editorRef.current.innerHTML = nextHtml
+    hideBrokenImages(editorRef.current)
+    lastHtmlRef.current = nextHtml
   }, [value])
 
   function emitChange() {
@@ -2133,9 +2174,11 @@ export default function App() {
       localStorage.setItem('mq_cards', JSON.stringify(cards))
     } catch (err) {
       console.warn('Nao foi possivel salvar cards no navegador.', err)
-      setSyncStatus('Deck grande demais para salvar neste navegador. Tentando salvar na nuvem...')
+      if (!logged || !sessionToken) {
+        setSyncStatus('Deck grande demais para salvar neste navegador. Entre na conta para sincronizar na nuvem.')
+      }
     }
-  }, [cards, ready])
+  }, [cards, ready, logged, sessionToken])
 
   useEffect(() => {
     if (!ready) return
@@ -2153,9 +2196,11 @@ export default function App() {
       localStorage.setItem('mq_stats', JSON.stringify(stats))
     } catch (err) {
       console.warn('Nao foi possivel salvar estatisticas no navegador.', err)
-      setSyncStatus('Estatisticas grandes demais para salvar neste navegador. Tentando salvar na nuvem...')
+      if (!logged || !sessionToken) {
+        setSyncStatus('Estatisticas grandes demais para salvar neste navegador. Entre na conta para sincronizar na nuvem.')
+      }
     }
-  }, [stats, ready])
+  }, [stats, ready, logged, sessionToken])
 
   useEffect(() => {
     if (!ready || !logged || !user || !sessionToken) return
@@ -3251,7 +3296,7 @@ export default function App() {
                   30s
                 </button>
               </div>
-              <div className="question-html" dangerouslySetInnerHTML={{__html: currentView.htmlFront || currentView.pergunta}} />
+              <HtmlContent className="question-html" html={currentView.htmlFront || currentView.pergunta} />
               <div className="study-workspace">
                 <div className="study-main">
                   {editing && (
@@ -3296,7 +3341,7 @@ export default function App() {
                         <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + ~)" aria-label="Marcar como acerto" type="button" />
                       )}
                       <div className="answer-box">
-                        <div dangerouslySetInnerHTML={{__html: currentView.htmlBack || feedback.expected}} />
+                        <HtmlContent html={currentView.htmlBack || feedback.expected} />
                       </div>
                     </>
                   ) : (
@@ -3388,7 +3433,7 @@ export default function App() {
                   </div>
                   <b>{i+1}. {v.pergunta}</b>
                   {shouldShowLibraryFrontPreview(v) && (
-                    <div className="library-front-preview" dangerouslySetInnerHTML={{__html: v.htmlFront}} />
+                    <HtmlContent className="library-front-preview" html={v.htmlFront} />
                   )}
                   <p><b>Resposta:</b> {v.resposta}</p>
                   {libraryEditingId === c.id && editing && (
