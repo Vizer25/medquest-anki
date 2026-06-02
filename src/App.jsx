@@ -630,25 +630,9 @@ function cardReviewedDay(card) {
   return dateKey(parsed)
 }
 
-function reviewPriorityBucket(card) {
-  const level = learningLevel(card)
-  const isTenMinuteStep = level <= 1
-  if (isTenMinuteStep && cardReviewedDay(card) === todayKey()) return 0
-  if (level >= 2) return 1
-  return 2
-}
-
-function sortReviewQueue(cards, now = Date.now()) {
+function sortReviewGroup(cards, now = Date.now()) {
   const daySeed = todayKey()
   return [...cards].sort((a, b) => {
-    const aBucket = reviewPriorityBucket(a)
-    const bBucket = reviewPriorityBucket(b)
-    if (aBucket !== bBucket) return aBucket - bBucket
-
-    const aLevel = learningLevel(a)
-    const bLevel = learningLevel(b)
-    if (aBucket === 1 && aLevel !== bLevel) return bLevel - aLevel
-
     const aTime = dueTimestamp(a, now)
     const bTime = dueTimestamp(b, now)
     if (aTime !== bTime) return aTime - bTime
@@ -658,6 +642,35 @@ function sortReviewQueue(cards, now = Date.now()) {
 
     return hashString(`${a.id}-${daySeed}`) - hashString(`${b.id}-${daySeed}`)
   })
+}
+
+function sortReviewQueue(cards, now = Date.now()) {
+  const today = todayKey()
+  const groups = [
+    cards.filter(card => learningLevel(card) === 1 && cardReviewedDay(card) === today),
+    cards.filter(card => learningLevel(card) === 0 && cardReviewedDay(card) === today),
+    cards.filter(card => learningLevel(card) === 6),
+    cards.filter(card => learningLevel(card) === 5),
+    cards.filter(card => learningLevel(card) === 4),
+    cards.filter(card => learningLevel(card) === 3),
+    cards.filter(card => learningLevel(card) === 2),
+    cards.filter(card => learningLevel(card) === 1 && cardReviewedDay(card) !== today),
+    cards.filter(card => learningLevel(card) === 0 && cardReviewedDay(card) !== today)
+  ].map(group => sortReviewGroup(group, now))
+
+  const queue = []
+  let added = true
+  while (added) {
+    added = false
+    groups.forEach(group => {
+      const next = group.shift()
+      if (next) {
+        queue.push(next)
+        added = true
+      }
+    })
+  }
+  return queue
 }
 
 function sortUnseenQueue(cards) {
