@@ -202,6 +202,13 @@ function dateKey(date) {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
+function addCalendarDaysTimestamp(timestamp, days) {
+  const date = new Date(timestamp)
+  date.setHours(0, 0, 0, 0)
+  date.setDate(date.getDate() + Number(days || 0))
+  return date.getTime()
+}
+
 function hashString(value) {
   return String(value || '').split('').reduce((hash, char) => {
     return ((hash << 5) - hash + char.charCodeAt(0)) | 0
@@ -312,6 +319,10 @@ function fsrsSchedulePreview(card, grade, now = Date.now(), retention = DEFAULT_
 
 function isCardDue(card, now = Date.now()) {
   if (card?.learnedAt || learningLevel(card) >= MASTERED_LEVEL) return false
+  const step = learningStep(learningLevel(card))
+  if (step.scheduledDays > 0 && card?.lastReviewedAt) {
+    return now >= addCalendarDaysTimestamp(dateInput(card.lastReviewedAt).getTime(), step.scheduledDays)
+  }
   return !card?.dueAt || dueTimestamp(card, now) <= now
 }
 
@@ -335,7 +346,11 @@ function scheduleByLearningLadder(card, grade, now = Date.now()) {
     ? Math.min(MASTERED_LEVEL, currentLevel + 1)
     : Math.max(0, currentLevel - 1)
   const step = learningStep(nextLevel)
-  const dueAt = step.delayMs == null ? now + (3650 * DAY) : now + step.delayMs
+  const dueAt = step.delayMs == null
+    ? now + (3650 * DAY)
+    : step.scheduledDays > 0
+      ? addCalendarDaysTimestamp(now, step.scheduledDays)
+      : now + step.delayMs
 
   return {
     level: nextLevel,
@@ -648,13 +663,13 @@ function sortReviewQueue(cards, now = Date.now()) {
   const today = todayKey()
   const groups = [
     cards.filter(card => learningLevel(card) === 1 && cardReviewedDay(card) === today),
+    cards.filter(card => learningLevel(card) === 1 && cardReviewedDay(card) !== today),
     cards.filter(card => learningLevel(card) === 0 && cardReviewedDay(card) === today),
     cards.filter(card => learningLevel(card) === 6),
     cards.filter(card => learningLevel(card) === 5),
     cards.filter(card => learningLevel(card) === 4),
     cards.filter(card => learningLevel(card) === 3),
     cards.filter(card => learningLevel(card) === 2),
-    cards.filter(card => learningLevel(card) === 1 && cardReviewedDay(card) !== today),
     cards.filter(card => learningLevel(card) === 0 && cardReviewedDay(card) !== today)
   ].map(group => sortReviewGroup(group, now))
 
