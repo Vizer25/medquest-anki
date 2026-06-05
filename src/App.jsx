@@ -14,6 +14,7 @@ const CURRENT_CARD_KEY = 'mq_current_card_id'
 const LOCAL_DB_NAME = 'medquest-local-vault'
 const LOCAL_DB_VERSION = 1
 const LOCAL_STATE_KEY = 'state'
+const LOCAL_SYNC_OUTBOX_KEY = 'sync-outbox'
 const authStorage = {
   getItem(key) {
     try {
@@ -252,6 +253,50 @@ async function saveLocalStateSnapshot(snapshot) {
   const now = new Date().toISOString()
   await writeLocalVault(LOCAL_STATE_KEY, { ...snapshot, savedAt: now })
   await writeLocalVault(`backup:${now}`, { ...snapshot, savedAt: now })
+}
+
+async function readLocalSyncOutbox() {
+  const items = await readLocalVault(LOCAL_SYNC_OUTBOX_KEY)
+  return Array.isArray(items) ? items : []
+}
+
+async function writeLocalSyncOutbox(items) {
+  await writeLocalVault(LOCAL_SYNC_OUTBOX_KEY, Array.isArray(items) ? items.slice(-1200) : [])
+}
+
+function localSyncItemId(card, event = null) {
+  const eventTime = event?.answeredAt || event?.date || event?.createdAt || ''
+  const contentTime = card?.manualEditedAt || card?.updatedAt || card?.updated_at || ''
+  return `${card?.id || 'card'}:${eventTime || contentTime || 'latest'}`
+}
+
+async function queueLocalSyncItems(itemsToQueue) {
+  const incoming = (Array.isArray(itemsToQueue) ? itemsToQueue : [itemsToQueue])
+    .filter(item => item?.card?.id)
+    .map(item => ({
+      id: item.id || localSyncItemId(item.card, item.event),
+      card: item.card,
+      event: item.event || null,
+      queuedAt: item.queuedAt || new Date().toISOString()
+    }))
+
+  if (!incoming.length) return 0
+
+  const existing = await readLocalSyncOutbox()
+  const byId = new Map(existing.map(item => [item.id, item]))
+
+  incoming.forEach(item => {
+    if (!item.event) {
+      for (const key of byId.keys()) {
+        if (key === `${item.card.id}:latest`) byId.delete(key)
+      }
+    }
+    byId.set(item.id, item)
+  })
+
+  const queued = [...byId.values()]
+  await writeLocalSyncOutbox(queued)
+  return queued.length
 }
 
 function addCalendarDaysTimestamp(timestamp, days) {
@@ -1959,6 +2004,7 @@ export default function App() {
   const [timeChallenge, setTimeChallenge] = useState(false)
   const [challengeLeft, setChallengeLeft] = useState(30)
   const answerRef = useRef(null)
+  const drainingSyncOutbox = useRef(false)
 
   async function loginThroughProxy(email, password) {
     const response = await fetch('/api/auth-login', {
@@ -2002,16 +2048,16 @@ export default function App() {
     return data
   }
 
-  async function syncReviewThroughProxy(card, event) {
-    if (!user || !sessionToken || !card?.id) return
+  async function syncReviewThroughProxy(card, event, authUser = user, token = sessionToken) {
+    if (!authUser || !token || !card?.id) return
     const response = await fetch('/api/sync-review', {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${sessionToken}`,
+        authorization: `Bearer ${token}`,
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        userId: user.id,
+        userId: authUser.id,
         card,
         event
       })
@@ -2044,12 +2090,44 @@ export default function App() {
     if (!card) return
     syncReviewThroughProxy(card, event)
       .then(data => {
-        if (data?.fallback) setSyncStatus('Banco granular ainda nao esta pronto. Progresso mantido neste navegador.')
+        if (data?.fallback) {
+          queueLocalSyncItems({ card, event }).catch(err => console.warn('Nao foi possivel enfileirar sincronizacao.', err))
+          setSyncStatus('Banco granular ainda nao esta pronto. Progresso mantido neste navegador.')
+        } else {
+          drainLocalSyncOutbox().catch(err => console.warn('Fila local ainda pendente.', err))
+        }
       })
       .catch(err => {
         console.warn('Sincronizacao granular adiada.', err)
+        queueLocalSyncItems({ card, event }).catch(queueErr => console.warn('Nao foi possivel enfileirar sincronizacao.', queueErr))
         setSyncStatus('Supabase instavel. Progresso mantido neste navegador e tentarei de novo depois.')
       })
+  }
+
+  async function drainLocalSyncOutbox(authUser = user, token = sessionToken) {
+    if (!authUser || !token || drainingSyncOutbox.current) return
+
+    drainingSyncOutbox.current = true
+    try {
+      let queued = await readLocalSyncOutbox()
+      if (!queued.length) return
+
+      for (const item of queued) {
+        const data = await syncReviewThroughProxy(item.card, item.event, authUser, token)
+        if (data?.fallback) throw new Error(data.fallback)
+        queued = queued.filter(candidate => candidate.id !== item.id)
+        await writeLocalSyncOutbox(queued)
+        await new Promise(resolve => window.setTimeout(resolve, 120))
+      }
+
+      setSyncStatus('Pendencias locais sincronizadas.')
+    } catch (err) {
+      console.warn('Nao foi possivel drenar fila local.', err)
+      const queued = await readLocalSyncOutbox().catch(() => [])
+      if (queued.length) setSyncStatus(`${queued.length} salvamentos locais aguardando Supabase.`)
+    } finally {
+      drainingSyncOutbox.current = false
+    }
   }
 
   async function syncCardsInChunks(cardList, label = 'cards', authUser = user, token = sessionToken) {
@@ -2064,6 +2142,9 @@ export default function App() {
       setSyncStatus(`${label} sincronizados em lotes pequenos.`)
     } catch (err) {
       console.warn('Sincronizacao em lote adiada.', err)
+      await queueLocalSyncItems(cardsToSync.map(card => ({ card }))).catch(queueErr => {
+        console.warn('Nao foi possivel enfileirar lote local.', queueErr)
+      })
       setSyncStatus('Supabase instavel. Importacao ficou salva neste navegador; tente sincronizar depois.')
     }
   }
@@ -2523,6 +2604,17 @@ export default function App() {
 
     return () => window.clearTimeout(saveTimer)
   }, [stats, ready, logged, user, sessionToken])
+
+  useEffect(() => {
+    if (!ready || !logged || !user || !sessionToken) return
+
+    drainLocalSyncOutbox(user, sessionToken).catch(err => console.warn('Fila local ainda pendente.', err))
+    const timer = window.setInterval(() => {
+      drainLocalSyncOutbox(user, sessionToken).catch(err => console.warn('Fila local ainda pendente.', err))
+    }, 30000)
+
+    return () => window.clearInterval(timer)
+  }, [ready, logged, user, sessionToken])
 
   useEffect(() => {
     if (!ready) return
