@@ -11,6 +11,9 @@ import {
 } from 'lucide-react'
 const REMEMBER_LOGIN_KEY = 'mq_remember_login'
 const CURRENT_CARD_KEY = 'mq_current_card_id'
+const LOCAL_DB_NAME = 'medquest-local-vault'
+const LOCAL_DB_VERSION = 1
+const LOCAL_STATE_KEY = 'state'
 const authStorage = {
   getItem(key) {
     try {
@@ -200,6 +203,55 @@ function dateKey(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${date.getFullYear()}-${month}-${day}`
+}
+
+function openLocalDb() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error('IndexedDB indisponivel.'))
+      return
+    }
+    const request = window.indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_VERSION)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv')
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function readLocalVault(key = LOCAL_STATE_KEY) {
+  const db = await openLocalDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readonly')
+    const request = tx.objectStore('kv').get(key)
+    request.onsuccess = () => resolve(request.result || null)
+    request.onerror = () => reject(request.error)
+    tx.oncomplete = () => db.close()
+  })
+}
+
+async function writeLocalVault(key, value) {
+  const db = await openLocalDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readwrite')
+    tx.objectStore('kv').put(value, key)
+    tx.oncomplete = () => {
+      db.close()
+      resolve()
+    }
+    tx.onerror = () => {
+      db.close()
+      reject(tx.error)
+    }
+  })
+}
+
+async function saveLocalStateSnapshot(snapshot) {
+  const now = new Date().toISOString()
+  await writeLocalVault(LOCAL_STATE_KEY, { ...snapshot, savedAt: now })
+  await writeLocalVault(`backup:${now}`, { ...snapshot, savedAt: now })
 }
 
 function addCalendarDaysTimestamp(timestamp, days) {
@@ -1349,6 +1401,20 @@ function cardProgressScore(card) {
   return attempts * 10000 + level * 1000 + stage * 100 + correct * 10 + Math.min(recency / 1000000000000, 9)
 }
 
+function timestampScore(value) {
+  const parsed = new Date(value || '').getTime()
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function contentTimestamp(card) {
+  return Math.max(
+    timestampScore(card?.manualEditedAt),
+    timestampScore(card?.sourceUpdatedAt),
+    timestampScore(card?.importedAt),
+    timestampScore(card?.createdAt)
+  )
+}
+
 function cardIdentityKeys(card) {
   if (!card) return []
   const keys = new Set()
@@ -1363,21 +1429,37 @@ function cardIdentityKeys(card) {
 function chooseRicherCard(first, second) {
   if (!first) return second
   if (!second) return first
-  const preferred = cardProgressScore(second) > cardProgressScore(first) ? second : first
-  const fallback = preferred === first ? second : first
+  const contentPreferred = contentTimestamp(second) > contentTimestamp(first) ? second : first
+  const progressPreferred = cardProgressScore(second) > cardProgressScore(first) ? second : first
+  const fallback = contentPreferred === first ? second : first
   return {
     ...fallback,
-    ...preferred,
-    pergunta: preferred.pergunta || fallback.pergunta,
-    resposta: preferred.resposta || fallback.resposta,
-    html_front: preferred.html_front || fallback.html_front,
-    html_back: preferred.html_back || fallback.html_back,
-    frontHtml: preferred.frontHtml || fallback.frontHtml,
-    backHtml: preferred.backHtml || fallback.backHtml,
-    tags: preferred.tags || fallback.tags,
-    importKey: preferred.importKey || fallback.importKey || importCardKey(preferred),
-    originalImportKey: preferred.originalImportKey || fallback.originalImportKey || importCardKey(preferred)
+    ...progressPreferred,
+    pergunta: contentPreferred.pergunta || fallback.pergunta,
+    resposta: contentPreferred.resposta || fallback.resposta,
+    htmlFront: contentPreferred.htmlFront || contentPreferred.html_front || fallback.htmlFront || fallback.html_front,
+    htmlBack: contentPreferred.htmlBack || contentPreferred.html_back || fallback.htmlBack || fallback.html_back,
+    html_front: contentPreferred.html_front || contentPreferred.htmlFront || fallback.html_front || fallback.htmlFront,
+    html_back: contentPreferred.html_back || contentPreferred.htmlBack || fallback.html_back || fallback.htmlBack,
+    frontHtml: contentPreferred.frontHtml || fallback.frontHtml,
+    backHtml: contentPreferred.backHtml || fallback.backHtml,
+    tags: contentPreferred.tags || fallback.tags,
+    manualEditedAt: contentPreferred.manualEditedAt || fallback.manualEditedAt,
+    sourceUpdatedAt: contentPreferred.sourceUpdatedAt || fallback.sourceUpdatedAt,
+    importedAt: contentPreferred.importedAt || fallback.importedAt,
+    importKey: contentPreferred.importKey || fallback.importKey || importCardKey(contentPreferred),
+    originalImportKey: contentPreferred.originalImportKey || fallback.originalImportKey || importCardKey(contentPreferred)
   }
+}
+
+function mergeStatsSources(cloudStats, localStats) {
+  const cloud = safeStats(cloudStats)
+  const local = safeStats(localStats)
+  const cloudAnswered = Number(cloud.correct || 0) + Number(cloud.wrong || 0)
+  const localAnswered = Number(local.correct || 0) + Number(local.wrong || 0)
+  if (localAnswered > cloudAnswered) return local
+  if (cloudAnswered > localAnswered) return cloud
+  return (local.history || []).length >= (cloud.history || []).length ? local : cloud
 }
 
 function mergeCardSources(...sources) {
@@ -2012,29 +2094,32 @@ export default function App() {
       setSyncStatus('Banco granular ainda nao esta pronto. Usando progresso local.')
     }
 
-    let cardsToUse = hasCloudCards ? data.cards : null
+    let cardsToUse = hasCloudCards ? data.cards : seedCards
     const localActive = activeCardCount(seedCards)
     const cloudActive = activeCardCount(cardsToUse)
+    const hasLocalCards = Array.isArray(seedCards) && seedCards.length > 0 && seedCards !== DEFAULT_CARDS
+    const shouldMergeLocal = hasCloudCards && hasLocalCards
     const localDeckIsLarger = hasCloudCards && localActive > cloudActive
 
-    if (localDeckIsLarger) {
+    if (shouldMergeLocal) {
       cardsToUse = mergeCardSources(data.cards, seedCards)
-      setSyncStatus(`Recuperando deck local maior: ${activeCardCount(cardsToUse)} cards encontrados. Sincronizando em lotes...`)
+      setSyncStatus(`Mesclando deck local e nuvem: ${activeCardCount(cardsToUse)} cards preservados. Sincronizando...`)
     }
 
-    if (hasCloudCards) setCards(cardsToUse)
-    if (hasCloudStats) setStats(safeStats(data.stats))
+    if (hasCloudCards || hasLocalCards) setCards(cardsToUse)
+    if (hasCloudStats) setStats(mergeStatsSources(data.stats, seedStats))
 
     if (data?.migrationNeeded && hasCloudCards) {
       if (!localDeckIsLarger) {
         setSyncStatus(`Recuperando backup antigo: ${data.legacyCardCount || data.cards.length} cards encontrados. Sincronizando em lotes...`)
       }
-      syncCardsInChunks(cardsToUse, localDeckIsLarger ? 'Deck local recuperado' : 'Backup antigo recuperado', authedUser, token)
+      syncCardsInChunks(cardsToUse, shouldMergeLocal ? 'Deck local preservado' : 'Backup antigo recuperado', authedUser, token)
       return
     }
 
-    if (localDeckIsLarger) {
-      syncCardsInChunks(cardsToUse, 'Deck local recuperado', authedUser, token)
+    if (shouldMergeLocal) {
+      syncCardsInChunks(cardsToUse, 'Deck local preservado', authedUser, token)
+      if (hasCloudStats) saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data.stats, seedStats)).catch(err => console.warn('Stats merge adiado.', err))
       return
     }
 
@@ -2070,17 +2155,24 @@ export default function App() {
       let nextCurrentCardId = getStoredCurrentCardId()
 
       try {
+        const vault = await readLocalVault().catch(() => null)
+        if (vault?.cards?.length) nextCards = vault.cards
+        if (vault?.config) nextConfig = { ...DEFAULT_CONFIG, ...vault.config }
+        if (vault?.stats) nextStats = safeStats(vault.stats)
+        if (vault?.lastAnsweredId) nextLastAnswered = vault.lastAnsweredId
+        if (vault?.currentCardId) nextCurrentCardId = vault.currentCardId
+
         const savedCards = localStorage.getItem('mq_cards')
         const savedConfig = localStorage.getItem('mq_config')
         const savedStats = localStorage.getItem('mq_stats')
         const savedLastAnswered = localStorage.getItem('mq_last_answered')
         const savedCurrentCardId = localStorage.getItem(CURRENT_CARD_KEY)
 
-        if (savedCards) nextCards = JSON.parse(savedCards)
-        if (savedConfig) nextConfig = { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) }
-        if (savedStats) nextStats = safeStats(JSON.parse(savedStats))
-        if (savedLastAnswered) nextLastAnswered = savedLastAnswered
-        if (savedCurrentCardId) nextCurrentCardId = savedCurrentCardId
+        if (!vault?.cards?.length && savedCards) nextCards = JSON.parse(savedCards)
+        if (!vault?.config && savedConfig) nextConfig = { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) }
+        if (!vault?.stats && savedStats) nextStats = safeStats(JSON.parse(savedStats))
+        if (!vault?.lastAnsweredId && savedLastAnswered) nextLastAnswered = savedLastAnswered
+        if (!vault?.currentCardId && savedCurrentCardId) nextCurrentCardId = savedCurrentCardId
       } catch {
         localStorage.removeItem('mq_stats')
       }
@@ -2363,6 +2455,24 @@ export default function App() {
       <div className="bar"><div style={{width: `${progress}%`}} /></div>
     </>
   )
+
+  useEffect(() => {
+    if (!ready) return
+
+    const timer = window.setTimeout(() => {
+      saveLocalStateSnapshot({
+        cards,
+        stats,
+        config,
+        lastAnsweredId,
+        currentCardId
+      }).catch(err => {
+        console.warn('Nao foi possivel salvar cofre local.', err)
+      })
+    }, 800)
+
+    return () => window.clearTimeout(timer)
+  }, [cards, stats, config, lastAnsweredId, currentCardId, ready])
 
   useEffect(() => {
     if (!ready) return
@@ -3058,7 +3168,9 @@ export default function App() {
     const pergunta = stripHtml(editFront)
     const resposta = stripHtml(editBack)
     let updatedCard = null
-    setCards(prev => prev.map(c => {
+    let nextCardsForVault = null
+    setCards(prev => {
+      nextCardsForVault = prev.map(c => {
       if (c.id !== editingCardId) return c
       updatedCard = {
         ...c,
@@ -3070,7 +3182,13 @@ export default function App() {
         palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
       }
       return updatedCard
-    }))
+      })
+      return nextCardsForVault
+    })
+    if (nextCardsForVault) {
+      saveLocalStateSnapshot({ cards: nextCardsForVault, stats, config, lastAnsweredId, currentCardId })
+        .catch(err => console.warn('Snapshot de edicao adiado.', err))
+    }
     if (updatedCard) syncOneCard(updatedCard)
     if (feedback?.cardId === editingCardId) {
       setFeedback(prev => prev ? {
