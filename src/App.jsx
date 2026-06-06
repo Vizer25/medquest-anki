@@ -2960,6 +2960,15 @@ export default function App() {
     if (challengeLeft <= 0) evaluate({ timedOut: true })
   }, [timeChallenge, challengeLeft, current?.id, currentAlreadyAnswered, editing])
 
+  useEffect(() => {
+    if (!authLoading) return
+    const timer = window.setTimeout(() => {
+      setAuthLoading(false)
+      setFeedback({ type: 'bad', text: 'Login demorou demais. Tente novamente; se repetir, confirme Email/senha no Firebase Authentication.' })
+    }, 20000)
+    return () => window.clearTimeout(timer)
+  }, [authLoading])
+
   async function cloudEnter() {
     const email = login.trim()
     if (!email || !senha) {
@@ -2977,20 +2986,24 @@ export default function App() {
     clearStoredAuthSession()
 
     try {
-      await setPersistence(firebaseAuth, rememberLogin ? browserLocalPersistence : browserSessionPersistence)
+      await withTimeout(
+        setPersistence(firebaseAuth, rememberLogin ? browserLocalPersistence : browserSessionPersistence),
+        5000,
+        'Tempo limite ao preparar login Firebase'
+      )
       let firebaseCredential
       try {
         firebaseCredential = await withTimeout(
           signInWithEmailAndPassword(firebaseAuth, email, senha),
-          12000,
+          8000,
           'Tempo limite ao fazer login no Firebase'
         )
       } catch (firebaseErr) {
         const code = firebaseErr?.code || ''
-        if (/user-not-found|invalid-credential/i.test(code)) {
+        if (/user-not-found/i.test(code)) {
           firebaseCredential = await withTimeout(
             createUserWithEmailAndPassword(firebaseAuth, email, senha),
-            12000,
+            8000,
             'Tempo limite ao criar conta no Firebase'
           )
         } else {
