@@ -311,9 +311,20 @@ async function writeLocalSyncOutbox(items) {
 }
 
 function localSyncItemId(card, event = null) {
-  const eventTime = event?.answeredAt || event?.date || event?.createdAt || ''
-  const contentTime = card?.manualEditedAt || card?.updatedAt || card?.updated_at || ''
-  return `${card?.id || 'card'}:${eventTime || contentTime || 'latest'}`
+  return `${card?.id || 'card'}:latest`
+}
+
+function compactLocalSyncItems(items = []) {
+  const byCard = new Map()
+  items.filter(item => item?.card?.id).forEach(item => {
+    const id = localSyncItemId(item.card)
+    byCard.set(id, {
+      ...item,
+      id,
+      event: item.event || null
+    })
+  })
+  return [...byCard.values()]
 }
 
 async function queueLocalSyncItems(itemsToQueue) {
@@ -328,16 +339,12 @@ async function queueLocalSyncItems(itemsToQueue) {
 
   if (!incoming.length) return 0
 
-  const existing = await readLocalSyncOutbox()
-  const byId = new Map(existing.map(item => [item.id, item]))
+  const existing = compactLocalSyncItems(await readLocalSyncOutbox())
+  const byId = new Map(existing.map(item => [localSyncItemId(item.card), item]))
 
   incoming.forEach(item => {
-    if (!item.event) {
-      for (const key of byId.keys()) {
-        if (key === `${item.card.id}:latest`) byId.delete(key)
-      }
-    }
-    byId.set(item.id, item)
+    const id = localSyncItemId(item.card)
+    byId.set(id, { ...item, id })
   })
 
   const queued = [...byId.values()]
@@ -2376,7 +2383,7 @@ export default function App() {
       .catch(err => {
         console.warn('Sincronizacao granular adiada.', err)
         queueLocalSyncItems({ card, event }).catch(queueErr => console.warn('Nao foi possivel enfileirar sincronizacao.', queueErr))
-        setSyncStatus('Nuvem instavel. Progresso mantido neste navegador e tentarei de novo depois.')
+        setSyncStatus(`Card salvo localmente. Erro da nuvem: ${firebaseErrorSummary(err)}`)
       })
   }
 
@@ -2385,7 +2392,8 @@ export default function App() {
 
     drainingSyncOutbox.current = true
     try {
-      let queued = await readLocalSyncOutbox()
+      let queued = compactLocalSyncItems(await readLocalSyncOutbox())
+      await writeLocalSyncOutbox(queued)
       if (!queued.length) return
 
       for (const item of queued) {
@@ -2399,8 +2407,9 @@ export default function App() {
       setSyncStatus('Pendencias locais sincronizadas.')
     } catch (err) {
       console.warn('Nao foi possivel drenar fila local.', err)
-      const queued = await readLocalSyncOutbox().catch(() => [])
-      if (queued.length) setSyncStatus(`${queued.length} salvamentos locais aguardando a nuvem.`)
+      const queued = compactLocalSyncItems(await readLocalSyncOutbox().catch(() => []))
+      await writeLocalSyncOutbox(queued).catch(() => {})
+      if (queued.length) setSyncStatus(`${queued.length} cards aguardando a nuvem. Erro: ${firebaseErrorSummary(err)}`)
     } finally {
       drainingSyncOutbox.current = false
     }
@@ -2873,7 +2882,7 @@ export default function App() {
         await saveProfileThroughProxy(user, sessionToken, undefined, stats)
       } catch (err) {
         console.warn('Nao foi possivel salvar estatisticas agora.', err)
-        setSyncStatus('Nuvem instavel. Estatisticas ficaram salvas neste navegador.')
+        setSyncStatus(`Estatisticas salvas localmente. Erro da nuvem: ${firebaseErrorSummary(err)}`)
       }
     }, 12000)
 
