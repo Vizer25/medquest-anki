@@ -21,7 +21,6 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
   setDoc,
-  writeBatch
 } from 'firebase/firestore'
 import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs'
 import JSZip from 'jszip'
@@ -39,6 +38,7 @@ const LOCAL_DB_VERSION = 1
 const LOCAL_STATE_KEY = 'state'
 const LOCAL_SYNC_OUTBOX_KEY = 'sync-outbox'
 const FIREBASE_CLOUD_TOKEN = 'firebase-firestore'
+const FIRESTORE_PAYLOAD_CHUNK_SIZE = 650000
 const authStorage = {
   getItem(key) {
     try {
@@ -357,6 +357,10 @@ function firestoreCardRef(userId, cardId) {
   return doc(firestoreDb, 'users', userId, 'cards', String(cardId))
 }
 
+function firestoreCardChunkRef(userId, cardId, index) {
+  return doc(firestoreDb, 'users', userId, 'cards', String(cardId), 'payloadChunks', `c${String(index).padStart(4, '0')}`)
+}
+
 function firestoreUserRef(userId) {
   return doc(firestoreDb, 'users', userId)
 }
@@ -364,6 +368,83 @@ function firestoreUserRef(userId) {
 function firestoreEventId(card, event = {}) {
   const raw = `${card?.id || 'card'}_${event.answeredAt || event.date || Date.now()}_${event.grade || ''}`
   return raw.replace(/[^\w.-]+/g, '_').slice(0, 180)
+}
+
+function firebaseErrorSummary(error) {
+  const code = error?.code || ''
+  const message = error?.message || String(error || '')
+  if (code) return `${code}: ${message}`.slice(0, 220)
+  return message.slice(0, 220)
+}
+
+function chunkText(text, size = FIRESTORE_PAYLOAD_CHUNK_SIZE) {
+  const chunks = []
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size))
+  }
+  return chunks
+}
+
+async function readFirebaseCardPayload(userId, snapshot) {
+  const data = snapshot.data()
+  if (data?.payload && typeof data.payload === 'object') return data.payload
+  if (!data?.payloadChunked) return data
+
+  const chunkSnaps = await getDocs(collection(firestoreDb, 'users', userId, 'cards', snapshot.id, 'payloadChunks'))
+  const text = chunkSnaps.docs
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(item => item.data()?.text || '')
+    .join('')
+
+  if (!text) return data
+  try {
+    return JSON.parse(text)
+  } catch {
+    return data
+  }
+}
+
+async function writeFirebaseCardPayload(userId, card) {
+  const cleaned = cleanCloudValue(card)
+  const payloadText = JSON.stringify(cleaned)
+  const meta = {
+    updatedAt: new Date().toISOString(),
+    manualEditedAt: card.manualEditedAt || null,
+    dueAt: card.dueAt ?? null,
+    reviewLevel: Number(card.reviewLevel || 0),
+    correctCount: Number(card.correctCount || 0),
+    reviewAttempts: Number(card.reviewAttempts || card.siteReps || 0),
+    deleted: !!card.deleted,
+    suspended: !!card.suspended
+  }
+
+  if (payloadText.length <= FIRESTORE_PAYLOAD_CHUNK_SIZE) {
+    await setDoc(firestoreCardRef(userId, card.id), {
+      ...meta,
+      payload: cleaned,
+      payloadChunked: false,
+      payloadChunkCount: 0
+    }, { merge: true })
+    return
+  }
+
+  const chunks = chunkText(payloadText)
+  await setDoc(firestoreCardRef(userId, card.id), {
+    ...meta,
+    payload: null,
+    payloadPreview: {
+      id: card.id,
+      pergunta: String(card.pergunta || '').slice(0, 500),
+      resposta: String(card.resposta || '').slice(0, 500),
+      tags: card.tags || ''
+    },
+    payloadChunked: true,
+    payloadChunkCount: chunks.length
+  }, { merge: true })
+
+  await Promise.all(chunks.map((text, index) => {
+    return setDoc(firestoreCardChunkRef(userId, card.id, index), { text, index }, { merge: true })
+  }))
 }
 
 function waitForFirebaseUser(timeoutMs = 3000) {
@@ -392,11 +473,10 @@ async function getFirebaseProfile(authedUser) {
 
   const userData = userSnap.exists() ? userSnap.data() : {}
   const cards = []
-  cardSnaps.forEach(snapshot => {
-    const data = snapshot.data()
-    const payload = data?.payload && typeof data.payload === 'object' ? data.payload : data
+  for (const snapshot of cardSnaps.docs) {
+    const payload = await readFirebaseCardPayload(userId, snapshot)
     if (payload?.id) cards.push(payload)
-  })
+  }
 
   return {
     cards,
@@ -427,17 +507,7 @@ async function saveFirebaseCard(authedUser, card, event = null) {
   const userId = cloudUserId(authedUser)
   if (!userId || !card?.id) throw new Error('Card Firebase invalido.')
 
-  await setDoc(firestoreCardRef(userId, card.id), {
-    payload: cleanCloudValue(card),
-    updatedAt: new Date().toISOString(),
-    manualEditedAt: card.manualEditedAt || null,
-    dueAt: card.dueAt ?? null,
-    reviewLevel: Number(card.reviewLevel || 0),
-    correctCount: Number(card.correctCount || 0),
-    reviewAttempts: Number(card.reviewAttempts || card.siteReps || 0),
-    deleted: !!card.deleted,
-    suspended: !!card.suspended
-  }, { merge: true })
+  await writeFirebaseCardPayload(userId, card)
 
   if (event) {
     await setDoc(doc(firestoreDb, 'users', userId, 'reviewEvents', firestoreEventId(card, event)), {
@@ -454,23 +524,33 @@ async function saveFirebaseCardsBatch(authedUser, cardBatch) {
   const cards = Array.isArray(cardBatch) ? cardBatch.filter(card => card?.id) : []
   if (!userId || !cards.length) return
 
-  for (let start = 0; start < cards.length; start += 450) {
-    const batch = writeBatch(firestoreDb)
-    cards.slice(start, start + 450).forEach(card => {
-      batch.set(firestoreCardRef(userId, card.id), {
-        payload: cleanCloudValue(card),
-        updatedAt: new Date().toISOString(),
-        manualEditedAt: card.manualEditedAt || null,
-        dueAt: card.dueAt ?? null,
-        reviewLevel: Number(card.reviewLevel || 0),
-        correctCount: Number(card.correctCount || 0),
-        reviewAttempts: Number(card.reviewAttempts || card.siteReps || 0),
-        deleted: !!card.deleted,
-        suspended: !!card.suspended
-      }, { merge: true })
+  const failed = []
+  let synced = 0
+
+  for (let start = 0; start < cards.length; start += 20) {
+    const results = await Promise.allSettled(cards.slice(start, start + 20).map(card => writeFirebaseCardPayload(userId, card)))
+    results.forEach((result, index) => {
+      const card = cards[start + index]
+      if (result.status === 'fulfilled') {
+        synced += 1
+      } else {
+        failed.push({ card, error: result.reason })
+      }
     })
-    await batch.commit()
+    await new Promise(resolve => window.setTimeout(resolve, 80))
   }
+
+  if (failed.length) {
+    await queueLocalSyncItems(failed.map(item => ({ card: item.card }))).catch(err => {
+      console.warn('Nao foi possivel guardar cards falhos na fila local.', err)
+    })
+  }
+
+  if (failed.length && synced === 0) {
+    throw new Error(`Firebase nao salvou o lote: ${firebaseErrorSummary(failed[0].error)}`)
+  }
+
+  return { synced, failed: failed.length }
 }
 
 function addCalendarDaysTimestamp(timestamp, days) {
@@ -2258,8 +2338,8 @@ export default function App() {
   async function syncCardsBatchThroughProxy(cardBatch, authUser = user, token = sessionToken) {
     if (!authUser || !token || !cardBatch?.length) return null
     if (token === FIREBASE_CLOUD_TOKEN) {
-      await saveFirebaseCardsBatch(authUser, cardBatch)
-      return { ok: true, synced: cardBatch.length, provider: 'firebase' }
+      const result = await saveFirebaseCardsBatch(authUser, cardBatch)
+      return { ok: true, synced: result?.synced ?? cardBatch.length, failed: result?.failed || 0, provider: 'firebase' }
     }
 
     const response = await fetch('/api/sync-cards', {
@@ -2331,17 +2411,28 @@ export default function App() {
     const cardsToSync = cardList.filter(Boolean)
     const chunkSize = 100
     try {
+      let failedTotal = 0
+      let syncedTotal = 0
       for (let i = 0; i < cardsToSync.length; i += chunkSize) {
-        await syncCardsBatchThroughProxy(cardsToSync.slice(i, i + chunkSize), authUser, token)
+        const result = await syncCardsBatchThroughProxy(cardsToSync.slice(i, i + chunkSize), authUser, token)
+        syncedTotal += Number(result?.synced || 0)
+        failedTotal += Number(result?.failed || 0)
+        if (result?.failed) {
+          setSyncStatus(`${label}: ${result.synced || 0} salvos na nuvem, ${result.failed} aguardando nova tentativa.`)
+        }
         await new Promise(resolve => window.setTimeout(resolve, 150))
       }
-      setSyncStatus(`${label} sincronizados em lotes pequenos.`)
+      if (failedTotal) {
+        setSyncStatus(`${label}: ${syncedTotal} salvos na nuvem, ${failedTotal} aguardando nova tentativa.`)
+      } else {
+        setSyncStatus(`${label} sincronizados na nuvem.`)
+      }
     } catch (err) {
       console.warn('Sincronizacao em lote adiada.', err)
       await queueLocalSyncItems(cardsToSync.map(card => ({ card }))).catch(queueErr => {
         console.warn('Nao foi possivel enfileirar lote local.', queueErr)
       })
-      setSyncStatus('Nuvem instavel. Importacao ficou salva neste navegador; tentarei sincronizar depois.')
+      setSyncStatus(`Falha de sincronizacao: ${firebaseErrorSummary(err)}. Importacao ficou salva neste navegador; tentarei sincronizar depois.`)
     }
   }
 
@@ -2913,42 +3004,43 @@ export default function App() {
         return
       }
 
-      let migratedCards = cards
-      let migratedStats = stats
-      try {
-        const oldData = await loginThroughProxy(email, senha)
-        const oldToken = oldData.session?.access_token || oldData.access_token || ''
-        const oldUser = oldData.user
-        if (oldUser && oldToken) {
-          const oldProfile = await getProfileThroughProxy(oldUser, oldToken)
-          if (Array.isArray(oldProfile?.cards) && oldProfile.cards.length) {
-            migratedCards = mergeCardSources(oldProfile.cards, cards)
-          }
-          if (oldProfile?.stats) {
-            migratedStats = mergeStatsSources(oldProfile.stats, stats)
-          }
-          await saveFirebaseProfile(firebaseUser, migratedCards, migratedStats)
-          setSyncStatus('Firebase conectado. Backup antigo migrado para a nova nuvem.')
-        }
-      } catch (migrationErr) {
-        console.warn('Migracao Supabase -> Firebase adiada.', migrationErr)
-        setSyncStatus('Firebase conectado. Backup antigo do Supabase sera tentado depois.')
-      }
-
       setUser(firebaseUser)
       setSessionToken(FIREBASE_CLOUD_TOKEN)
       setLogged(true)
       setSenha('')
       setFeedback(null)
+      setSyncStatus('Firebase conectado. Carregando nova nuvem...')
 
       withTimeout(
-        loadCloudProgress(firebaseUser, migratedCards, migratedStats, FIREBASE_CLOUD_TOKEN),
+        loadCloudProgress(firebaseUser, cards, stats, FIREBASE_CLOUD_TOKEN),
         15000,
         'Tempo limite ao carregar progresso'
       ).catch(err => {
         console.error(err)
         setSyncStatus('Nao consegui sincronizar agora. Usando progresso local.')
       })
+
+      ;(async () => {
+        try {
+          const oldData = await withTimeout(loginThroughProxy(email, senha), 8000, 'Tempo limite ao migrar Supabase')
+          const oldToken = oldData.session?.access_token || oldData.access_token || ''
+          const oldUser = oldData.user
+          if (!oldUser || !oldToken) return
+
+          const oldProfile = await withTimeout(getProfileThroughProxy(oldUser, oldToken), 10000, 'Tempo limite ao ler backup antigo')
+          const migratedCards = Array.isArray(oldProfile?.cards) && oldProfile.cards.length
+            ? mergeCardSources(oldProfile.cards, cards)
+            : cards
+          const migratedStats = oldProfile?.stats ? mergeStatsSources(oldProfile.stats, stats) : stats
+          await saveFirebaseProfile(firebaseUser, migratedCards, migratedStats)
+          setCards(migratedCards)
+          setStats(migratedStats)
+          setSyncStatus('Firebase conectado. Backup antigo migrado para a nova nuvem.')
+        } catch (migrationErr) {
+          console.warn('Migracao Supabase -> Firebase adiada.', migrationErr)
+          setSyncStatus('Firebase conectado. Backup antigo do Supabase sera tentado depois.')
+        }
+      })()
     } catch (err) {
       console.error(err)
       setFeedback({ type: 'bad', text: authErrorMessage(err) })
