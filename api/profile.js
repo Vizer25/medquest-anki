@@ -63,6 +63,58 @@ async function supabaseJson(path, authorization, options = {}) {
   }
 }
 
+function timestampScore(card = {}) {
+  return Math.max(
+    Date.parse(card.manualEditedAt || '') || 0,
+    Date.parse(card.updatedAt || '') || 0,
+    Date.parse(card.updated_at || '') || 0,
+    Date.parse(card.importedAt || '') || 0,
+    Number(card.lastReviewedAt || 0) || 0,
+    Number(card.dueAt || 0) || 0
+  )
+}
+
+function progressScore(card = {}) {
+  return (
+    Number(card.reviewAttempts || card.siteReps || card.reps || 0) * 1000 +
+    Number(card.correctCount || 0) * 100 +
+    Number(card.reviewWrong || 0) * 100 +
+    Number(card.reviewLevel || 0)
+  )
+}
+
+function mergeCard(existing = {}, incoming = {}) {
+  const contentWinner = timestampScore(incoming) >= timestampScore(existing) ? incoming : existing
+  const progressWinner = progressScore(incoming) >= progressScore(existing) ? incoming : existing
+  return {
+    ...existing,
+    ...incoming,
+    pergunta: contentWinner.pergunta || incoming.pergunta || existing.pergunta || '',
+    resposta: contentWinner.resposta || incoming.resposta || existing.resposta || '',
+    htmlFront: contentWinner.htmlFront || contentWinner.html_front || incoming.htmlFront || existing.htmlFront || '',
+    htmlBack: contentWinner.htmlBack || contentWinner.html_back || incoming.htmlBack || existing.htmlBack || '',
+    tags: contentWinner.tags || incoming.tags || existing.tags || '',
+    manualEditedAt: contentWinner.manualEditedAt || incoming.manualEditedAt || existing.manualEditedAt,
+    dueAt: progressWinner.dueAt ?? incoming.dueAt ?? existing.dueAt,
+    reviewLevel: progressWinner.reviewLevel ?? incoming.reviewLevel ?? existing.reviewLevel,
+    correctCount: progressWinner.correctCount ?? incoming.correctCount ?? existing.correctCount,
+    reviewAttempts: progressWinner.reviewAttempts ?? progressWinner.siteReps ?? incoming.reviewAttempts ?? existing.reviewAttempts,
+    siteReps: progressWinner.siteReps ?? progressWinner.reviewAttempts ?? incoming.siteReps ?? existing.siteReps,
+    reviewCorrect: progressWinner.reviewCorrect ?? incoming.reviewCorrect ?? existing.reviewCorrect,
+    reviewWrong: progressWinner.reviewWrong ?? incoming.reviewWrong ?? existing.reviewWrong
+  }
+}
+
+function mergeCardLists(primaryCards = [], backupCards = []) {
+  const byId = new Map()
+  ;[...backupCards, ...primaryCards].filter(Boolean).forEach(card => {
+    const id = String(card.id || card.card_id || '')
+    if (!id) return
+    byId.set(id, mergeCard(byId.get(id) || {}, card))
+  })
+  return [...byId.values()]
+}
+
 async function loadProfileData(userId, authorization) {
   const result = await supabaseJson(
     `/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=stats,email,cards`,
@@ -122,22 +174,24 @@ export default async function handler(req, res) {
       ])
       const legacyCards = Array.isArray(profile.cards) ? profile.cards : []
       const granularCards = granular.ok ? granular.cards : []
+      const mergedCards = mergeCardLists(granularCards, legacyCards)
       const useLegacyBackup = legacyCards.length > granularCards.length
 
       res.status(200).json({
-        cards: useLegacyBackup ? legacyCards : granularCards,
+        cards: mergedCards,
         stats: profile.stats,
         granularReady: granular.ok,
         granularDetail: granular.ok ? null : granular.detail,
-        migrationNeeded: granular.ok && useLegacyBackup,
+        migrationNeeded: granular.ok && (useLegacyBackup || mergedCards.length > granularCards.length),
         legacyCardCount: legacyCards.length,
-        granularCardCount: granularCards.length
+        granularCardCount: granularCards.length,
+        mergedCardCount: mergedCards.length
       })
       return
     }
 
     if (req.method === 'POST') {
-      const { id, email, stats } = req.body || {}
+      const { id, email, stats, cards } = req.body || {}
       if (id !== auth.user.id) {
         res.status(403).json({ message: 'Acesso negado.' })
         return
@@ -145,6 +199,7 @@ export default async function handler(req, res) {
 
       const profilePayload = { id, email }
       if (stats && typeof stats === 'object') profilePayload.stats = stats
+      if (Array.isArray(cards)) profilePayload.cards = cards.filter(Boolean)
 
       const response = await fetch(`${SUPABASE_URL}/rest/v1/profiles?on_conflict=id`, {
         method: 'POST',

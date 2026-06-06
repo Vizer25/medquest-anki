@@ -2034,6 +2034,7 @@ export default function App() {
       email: authedUser.email
     }
     if (nextStats && typeof nextStats === 'object') payload.stats = nextStats
+    if (Array.isArray(nextCards)) payload.cards = nextCards.filter(Boolean)
 
     const response = await fetch('/api/profile', {
       method: 'POST',
@@ -2064,6 +2065,7 @@ export default function App() {
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.message || 'Falha ao sincronizar revisao.')
+    if (data?.ok === false && data?.fallback === 'local') throw new Error(data.message || 'Falha ao sincronizar revisao.')
     return data
   }
 
@@ -2090,7 +2092,10 @@ export default function App() {
     if (!card) return
     syncReviewThroughProxy(card, event)
       .then(data => {
-        if (data?.fallback) {
+        if (data?.fallback === 'profile-json') {
+          queueLocalSyncItems({ card, event }).catch(err => console.warn('Nao foi possivel enfileirar sincronizacao.', err))
+          setSyncStatus('Salvo no backup da nuvem. Finalizando sincronizacao granular depois.')
+        } else if (data?.fallback) {
           queueLocalSyncItems({ card, event }).catch(err => console.warn('Nao foi possivel enfileirar sincronizacao.', err))
           setSyncStatus('Banco granular ainda nao esta pronto. Progresso mantido neste navegador.')
         } else {

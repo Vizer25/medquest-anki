@@ -10,6 +10,57 @@ function parseMaybeJson(text, fallback) {
   }
 }
 
+function safeIsoDate(value) {
+  if (!value) return null
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString()
+  const time = Date.parse(value)
+  if (!Number.isFinite(time)) return null
+  return new Date(time).toISOString()
+}
+
+function timestampScore(card = {}) {
+  return Math.max(
+    Date.parse(card.manualEditedAt || '') || 0,
+    Date.parse(card.updatedAt || '') || 0,
+    Date.parse(card.updated_at || '') || 0,
+    Date.parse(card.importedAt || '') || 0,
+    Number(card.lastReviewedAt || 0) || 0,
+    Number(card.dueAt || 0) || 0
+  )
+}
+
+function cardProgressScore(card = {}) {
+  return (
+    Number(card.reviewAttempts || card.siteReps || card.reps || 0) * 1000 +
+    Number(card.correctCount || 0) * 100 +
+    Number(card.reviewWrong || 0) * 100 +
+    Number(card.reviewLevel || 0)
+  )
+}
+
+function mergeCard(existing = {}, incoming = {}) {
+  const contentWinner = timestampScore(incoming) >= timestampScore(existing) ? incoming : existing
+  const progressWinner = cardProgressScore(incoming) >= cardProgressScore(existing) ? incoming : existing
+  return {
+    ...existing,
+    ...incoming,
+    pergunta: contentWinner.pergunta || incoming.pergunta || existing.pergunta || '',
+    resposta: contentWinner.resposta || incoming.resposta || existing.resposta || '',
+    htmlFront: contentWinner.htmlFront || contentWinner.html_front || incoming.htmlFront || existing.htmlFront || '',
+    htmlBack: contentWinner.htmlBack || contentWinner.html_back || incoming.htmlBack || existing.htmlBack || '',
+    tags: contentWinner.tags || incoming.tags || existing.tags || '',
+    manualEditedAt: contentWinner.manualEditedAt || incoming.manualEditedAt || existing.manualEditedAt,
+    dueAt: progressWinner.dueAt ?? incoming.dueAt ?? existing.dueAt,
+    reviewLevel: progressWinner.reviewLevel ?? incoming.reviewLevel ?? existing.reviewLevel,
+    correctCount: progressWinner.correctCount ?? incoming.correctCount ?? existing.correctCount,
+    reviewAttempts: progressWinner.reviewAttempts ?? progressWinner.siteReps ?? incoming.reviewAttempts ?? existing.reviewAttempts,
+    siteReps: progressWinner.siteReps ?? progressWinner.reviewAttempts ?? incoming.siteReps ?? existing.siteReps,
+    reviewCorrect: progressWinner.reviewCorrect ?? incoming.reviewCorrect ?? existing.reviewCorrect,
+    reviewWrong: progressWinner.reviewWrong ?? incoming.reviewWrong ?? existing.reviewWrong,
+    updatedAt: incoming.updatedAt || new Date().toISOString()
+  }
+}
+
 function bearerToken(req) {
   const authorization = req.headers.authorization || ''
   if (!authorization.toLowerCase().startsWith('bearer ')) return ''
@@ -59,6 +110,30 @@ async function supabaseJson(path, authorization, options = {}) {
   }
 }
 
+async function saveCardToProfileBackup(user, authorization, card) {
+  const profile = await supabaseJson(
+    `/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=cards,email`,
+    authorization
+  )
+  const row = Array.isArray(profile.data) ? profile.data[0] : profile.data
+  const cards = Array.isArray(row?.cards) ? row.cards.filter(Boolean) : []
+  const byId = new Map(cards.map(item => [String(item.id || item.card_id || ''), item]))
+  const id = String(card.id)
+  byId.set(id, mergeCard(byId.get(id) || {}, card))
+
+  const payload = {
+    id: user.id,
+    email: row?.email || user.email,
+    cards: [...byId.values()]
+  }
+
+  return supabaseJson('/rest/v1/profiles?on_conflict=id', authorization, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(payload)
+  })
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ message: 'Method not allowed' })
@@ -90,7 +165,7 @@ export default async function handler(req, res) {
       html_front: card.htmlFront || '',
       html_back: card.htmlBack || '',
       tags: card.tags || '',
-      due_at: card.dueAt ? new Date(card.dueAt).toISOString() : null,
+      due_at: safeIsoDate(card.dueAt),
       review_level: Number(card.reviewLevel || 0),
       correct_count: Number(card.correctCount || 0),
       site_reps: Number(card.siteReps || card.reviewAttempts || 0),
@@ -109,7 +184,12 @@ export default async function handler(req, res) {
     })
 
     if (!cardResult.ok) {
-      res.status(202).json({ ok: false, fallback: 'profile-json', detail: cardResult.data })
+      const backupResult = await saveCardToProfileBackup(auth.user, auth.authorization, card)
+      if (!backupResult.ok) {
+        res.status(202).json({ ok: false, fallback: 'local', message: 'Falha ao salvar no banco granular e no backup.', detail: { granular: cardResult.data, backup: backupResult.data } })
+        return
+      }
+      res.status(200).json({ ok: true, fallback: 'profile-json', message: 'Salvo no backup da nuvem.' })
       return
     }
 
@@ -125,15 +205,32 @@ export default async function handler(req, res) {
         payload: event
       }
 
-      await supabaseJson('/rest/v1/mq_review_events', auth.authorization, {
+      const eventResult = await supabaseJson('/rest/v1/mq_review_events', auth.authorization, {
         method: 'POST',
         headers: { Prefer: 'return=minimal' },
         body: JSON.stringify(eventPayload)
       })
+      if (!eventResult.ok) {
+        res.status(200).json({ ok: true, eventFallback: true, detail: eventResult.data })
+        return
+      }
     }
 
     res.status(200).json({ ok: true })
   } catch (err) {
+    try {
+      const auth = await authenticatedUser(req)
+      const { card } = req.body || {}
+      if (!auth.error && card?.id) {
+        const backupResult = await saveCardToProfileBackup(auth.user, auth.authorization, card)
+        if (backupResult.ok) {
+          res.status(200).json({ ok: true, fallback: 'profile-json', message: 'Salvo no backup da nuvem.' })
+          return
+        }
+      }
+    } catch {
+      // Fall through to local fallback response.
+    }
     res.status(202).json({ ok: false, fallback: 'local', message: err.message || 'Falha ao sincronizar revisao.' })
   }
 }
