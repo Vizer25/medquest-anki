@@ -2710,25 +2710,27 @@ export default function App() {
   const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
   const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
   const currentView = current ? getCardView(current) : null
+  const currentTagText = normalize(String(current?.tags || ''))
+  const currentExamBadges = [
+    currentTagText.includes('usp') ? { key: 'usp', label: 'USP' } : null,
+    currentTagText.includes('unicamp') ? { key: 'unicamp', label: 'Unicamp' } : null
+  ].filter(Boolean)
   const todayDone = dailyUniqueCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
+  const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
   const seenDeckCount = activeCards.filter(card => seenCardIds.has(card.id)).length
   const seenDeckPercent = activeCards.length ? Math.round((seenDeckCount / activeCards.length) * 100) : 0
-  const exposurePercent = activeCards.length ? Math.round((totalAnswered / activeCards.length) * 100) : 0
-  const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
-  const avgTime = totalAnswered ? Math.round(Number(stats.totalAnswerSeconds || 0) / totalAnswered) : 0
-  const progress = Math.min(100, Number(stats.xp || 0) % 100)
   const masteredCount = activeCards.filter(card => learningLevel(card) >= MASTERED_LEVEL).length
-  const partialCount = 0
-  const weakCount = Math.max(0, activeCards.length - masteredCount)
-  const masteredPercent = activeCards.length ? Math.round((masteredCount / activeCards.length) * 100) : 0
+  const masteredResponses = masteredCount
+  const progress = seenDeckPercent
+  const exposurePercent = seenDeckPercent
+  const avgTime = totalAnswered ? Math.round(Number(stats.totalAnswerSeconds || 0) / totalAnswered) : 0
   const recentHistory = (stats.history || []).slice(-50)
   const previousHistory = (stats.history || []).slice(-100, -50)
   const recentCorrectRate = recentHistory.length ? Math.round((recentHistory.filter(item => item.correct).length / recentHistory.length) * 100) : 0
   const previousCorrectRate = previousHistory.length ? Math.round((previousHistory.filter(item => item.correct).length / previousHistory.length) * 100) : null
   const recentTrend = previousCorrectRate == null ? null : recentCorrectRate - previousCorrectRate
-  const masteredResponses = Number(stats.byGrade.good || 0) + Number(stats.byGrade.easy || 0)
   const performanceDays = Array.from({ length: 30 }, (_, index) => {
     const date = new Date(Date.now() - (29 - index) * DAY)
     const key = dateKey(date)
@@ -2810,24 +2812,24 @@ export default function App() {
   const statsPanel = (
     <>
       <section className="stats stats-summary">
-        <div className="stat-card stat-today"><ListChecks/><span>Feitos hoje</span><b>{todayDone}</b><small>{remainingToday} para a meta</small></div>
-        <div className="stat-card stat-new-today"><Plus/><span>Inéditos hoje</span><b>{todayNewCards}</b><small>{remainingNewToday > 0 ? `${remainingNewToday} para a meta` : `${Math.max(0, todayDone - todayNewCards)} revisões`}</small></div>
-        <div className="stat-card"><Target/><span>Total de cards feitos</span><b>{totalAnswered}</b></div>
-        <div className="stat-card"><Trophy/><span>Acertos</span><b>{stats.correct}</b></div>
-        <div className="stat-card"><XCircle/><span>Erros</span><b>{stats.wrong}</b></div>
+        <div className="stat-card"><Target/><span>Total no deck</span><b>{activeCards.length}</b></div>
+        <div className="stat-card stat-new-today"><Plus/><span>Ineditos hoje</span><b>{todayNewCards}</b></div>
+        <div className="stat-card stat-review-today"><RotateCcw/><span>Revisoes hoje</span><b>{Math.max(0, todayDone - todayNewCards)}</b></div>
+        <div className="stat-card stat-learned"><Trophy/><span>Aprendidos</span><b>{masteredCount}</b></div>
+        <div className="stat-card stat-seen-deck"><Eye/><span>Ja vistos</span><b>{seenDeckCount}</b><small>{seenDeckPercent}% do deck</small></div>
         <div className="stat-card"><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
         <div className="stat-card stat-streak"><Flame/><span>Streak</span><b>{stats.studyStreak}</b><small>dias com meta batida</small></div>
         <div className="stat-card stat-seen-deck"><Eye/><span>Deck visto</span><b>{seenDeckPercent}%</b><small>{seenDeckCount} de {activeCards.length}</small></div>
         <div className="stat-card"><Target/><span>Vencidos agora</span><b>{dueCards.length}</b></div>
       </section>
-      {tab === 'stats' && (
+      {false && tab === 'stats' && (
         <section className="grade-strip">
           <div className="grade-bad"><b>{stats.byGrade.again}</b><span>0-59%</span><i style={{width: `${Math.min(100, ((stats.byGrade.again || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
           <div className="grade-mid"><b>{stats.byGrade.hard}</b><span>60-79%</span><i style={{width: `${Math.min(100, ((stats.byGrade.hard || 0) / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
           <div className="grade-ok"><b>{masteredResponses}</b><span>80-100%</span><i style={{width: `${Math.min(100, (masteredResponses / Math.max(1, totalAnswered)) * 100)}%`}} /></div>
         </section>
       )}
-      <div className="bar"><div style={{width: `${progress}%`}} /></div>
+      {false && <div className="bar"><div style={{width: `${progress}%`}} /></div>}
     </>
   )
 
@@ -4006,6 +4008,13 @@ export default function App() {
             </div>
           ) : (
             <>
+              {currentExamBadges.length > 0 && (
+                <div className="exam-badges" aria-label="Tags de prova">
+                  {currentExamBadges.map(badge => (
+                    <span className={`exam-badge exam-badge-${badge.key}`} key={badge.key}>{badge.label}</span>
+                  ))}
+                </div>
+              )}
               <div className="card-top">
                 <span className="card-count">Card vencido {currentQueueNumber} de {dueCards.length}</span>
                 <span className={timeChallenge && !currentAlreadyAnswered ? `challenge-timer ${challengeLeft <= 10 ? 'urgent' : ''}` : 'timer-chip'}>
@@ -4271,7 +4280,7 @@ export default function App() {
         </section>
       )}
 
-      {tab === 'stats' && (
+      {false && tab === 'stats' && (
         <section className="card">
           <h2>Progresso do estudo</h2>
           <div className="mastery-panel" hidden>
