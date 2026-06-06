@@ -2719,19 +2719,15 @@ export default function App() {
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
   const avgTime = totalAnswered ? Math.round(Number(stats.totalAnswerSeconds || 0) / totalAnswered) : 0
   const progress = Math.min(100, Number(stats.xp || 0) % 100)
-  const masteryEntries = activeCards.map(card => {
-    const cardMastery = stats.masteryByCard?.[card.id] || {}
-    return Number(cardMastery.lastPercent ?? cardMastery.bestPercent ?? 0)
-  })
   const masteredCount = activeCards.filter(card => learningLevel(card) >= MASTERED_LEVEL).length
-  const partialCount = masteryEntries.filter(value => value >= 60 && value < 80).length
-  const weakCount = Math.max(0, activeCards.length - masteredCount - partialCount)
+  const partialCount = 0
+  const weakCount = Math.max(0, activeCards.length - masteredCount)
+  const masteredPercent = activeCards.length ? Math.round((masteredCount / activeCards.length) * 100) : 0
   const recentHistory = (stats.history || []).slice(-50)
   const previousHistory = (stats.history || []).slice(-100, -50)
   const recentCorrectRate = recentHistory.length ? Math.round((recentHistory.filter(item => item.correct).length / recentHistory.length) * 100) : 0
   const previousCorrectRate = previousHistory.length ? Math.round((previousHistory.filter(item => item.correct).length / previousHistory.length) * 100) : null
   const recentTrend = previousCorrectRate == null ? null : recentCorrectRate - previousCorrectRate
-  const masteredPercent = activeCards.length ? Math.round((masteredCount / activeCards.length) * 100) : 0
   const masteredResponses = Number(stats.byGrade.good || 0) + Number(stats.byGrade.easy || 0)
   const performanceDays = Array.from({ length: 30 }, (_, index) => {
     const date = new Date(Date.now() - (29 - index) * DAY)
@@ -4278,7 +4274,7 @@ export default function App() {
       {tab === 'stats' && (
         <section className="card">
           <h2>Progresso do estudo</h2>
-          <div className="mastery-panel">
+          <div className="mastery-panel" hidden>
             <div className="mastery-head">
               <div>
                 <span>Cards ainda frágeis</span>
