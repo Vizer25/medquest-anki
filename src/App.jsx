@@ -2722,6 +2722,10 @@ export default function App() {
   const seenDeckCount = activeCards.filter(card => seenCardIds.has(card.id)).length
   const seenDeckPercent = activeCards.length ? Math.round((seenDeckCount / activeCards.length) * 100) : 0
   const masteredCount = activeCards.filter(card => learningLevel(card) >= MASTERED_LEVEL).length
+  const remainingLearningSteps = activeCards.reduce((sum, card) => sum + Math.max(0, MASTERED_LEVEL - learningLevel(card)), 0)
+  const targetDate = new Date(new Date().getFullYear(), 8, 30, 23, 59, 59, 999)
+  const daysUntilTarget = Math.max(1, Math.ceil((targetDate.getTime() - Date.now()) / DAY))
+  const dailyTargetToFinish = Math.ceil(remainingLearningSteps / daysUntilTarget)
   const masteredResponses = masteredCount
   const progress = seenDeckPercent
   const exposurePercent = seenDeckPercent
@@ -2812,10 +2816,11 @@ export default function App() {
   const statsPanel = (
     <>
       <section className="stats stats-summary">
-        <div className="stat-card"><Target/><span>Total no deck</span><b>{activeCards.length}</b></div>
+        <div className="stat-card stat-deck-total"><Target/><span>Total no deck</span><b>{activeCards.length}</b><small>{seenDeckCount} vistos ({seenDeckPercent}%)</small></div>
+        <div className="stat-card stat-today"><ListChecks/><span>Estudados hoje</span><b>{todayDone}</b><small>{todayNewCards} ineditos + {Math.max(0, todayDone - todayNewCards)} revisoes</small></div>
         <div className="stat-card stat-new-today"><Plus/><span>Ineditos hoje</span><b>{todayNewCards}</b></div>
         <div className="stat-card stat-review-today"><RotateCcw/><span>Revisoes hoje</span><b>{Math.max(0, todayDone - todayNewCards)}</b></div>
-        <div className="stat-card stat-learned"><Trophy/><span>Aprendidos</span><b>{masteredCount}</b></div>
+        <div className="stat-card stat-target-daily"><Trophy/><span>Meta diaria ate 30/09</span><b>{dailyTargetToFinish}</b><small>{daysUntilTarget} dias restantes</small></div>
         <div className="stat-card stat-seen-deck"><Eye/><span>Ja vistos</span><b>{seenDeckCount}</b><small>{seenDeckPercent}% do deck</small></div>
         <div className="stat-card"><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
         <div className="stat-card stat-streak"><Flame/><span>Streak</span><b>{stats.studyStreak}</b><small>dias com meta batida</small></div>
@@ -4275,6 +4280,24 @@ export default function App() {
             <div className="actions">
               <button onClick={createCard}><Plus size={18}/> Criar card</button>
               <button className="secondary" onClick={()=>{setNewFront(''); setNewBack(''); setNewTags('')}}>Limpar</button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {tab === 'stats' && (
+        <section className="card daily-rhythm-card">
+          <h2>Ritmo diario</h2>
+          <div className="chart-box">
+            <h4>Cards por dia</h4>
+            <div className="bar-chart daily-mini-chart">
+              {performanceDays.map(day => (
+                <div className="chart-day" key={day.key}>
+                  <b>{day.count || ''}</b>
+                  <span style={{height: `${Math.max(3, (day.count / maxPerformanceCount) * 100)}%`}} className={day.count >= dailyTargetToFinish ? 'met' : ''} title={`${day.label}: ${day.count} cards`} />
+                  <small>{day.label}</small>
+                </div>
+              ))}
             </div>
           </div>
         </section>

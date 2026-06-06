@@ -56,10 +56,11 @@ h1{font-size:48px;color:#101828;margin:0}
 .stats b{font-size:22px}
 .stats-summary{grid-template-columns:repeat(5,minmax(150px,1fr));align-items:stretch}
 .stats-summary .stat-card:nth-of-type(n+6){display:none}
-.stats-summary .stat-seen-deck{order:2}
+.stats-summary .stat-deck-total{order:1}
+.stats-summary .stat-today{order:2}
 .stats-summary .stat-new-today{order:3}
 .stats-summary .stat-review-today{order:4}
-.stats-summary .stat-learned{order:5}
+.stats-summary .stat-target-daily{order:5}
 .stat-card{position:relative}
 .stat-card small{display:block;color:#98a2b3;font-size:11px;font-weight:800;margin-top:2px}
 .stat-today{border-color:#2f9e67!important;background:#f0faf5!important;box-shadow:inset 4px 0 0 #2f9e67!important}
@@ -72,6 +73,8 @@ h1{font-size:48px;color:#101828;margin:0}
 .stat-review-today svg,.stat-review-today b{color:#344054!important}
 .stat-learned{border-color:#abefc6!important;background:#ecfdf3!important}
 .stat-learned svg,.stat-learned b{color:#067647!important}
+.stat-target-daily{border-color:#abefc6!important;background:#ecfdf3!important}
+.stat-target-daily svg,.stat-target-daily b{color:#067647!important}
 .stat-streak{border-color:#fed7aa!important;background:#fff7ed!important}
 .stat-streak svg{color:#f97316!important}
 .stat-streak b{color:#c2410c!important}
@@ -208,6 +211,11 @@ textarea{min-height:150px;resize:vertical}
 .chart-day span{width:100%;min-height:3px;background:#d0d5dd;border-radius:6px 6px 0 0}
 .chart-day span.met{background:#00c853}
 .chart-day small{font-size:10px;color:#667085;writing-mode:vertical-rl;transform:rotate(180deg)}
+.daily-rhythm-card{margin-top:16px}
+.daily-rhythm-card h2{margin-bottom:12px}
+.daily-rhythm-card .chart-box{padding:14px}
+.daily-rhythm-card .bar-chart{height:160px}
+.daily-rhythm-card .chart-day span.met{background:#2f9e67}
 .accuracy-chart{display:grid;gap:8px;max-height:230px;overflow:auto;padding-right:6px}
 .accuracy-row{display:grid;grid-template-columns:52px 1fr 48px;gap:10px;align-items:center}
 .accuracy-row span,.accuracy-row b{font-size:13px;color:#667085}
