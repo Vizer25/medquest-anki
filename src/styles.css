@@ -97,6 +97,15 @@ h1{font-size:48px;color:#101828;margin:0}
 .exam-badge{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:18px;padding:0 7px;border-radius:999px;color:white;font-size:10px;font-weight:950;line-height:1;box-shadow:0 1px 2px #1018281a}
 .exam-badge-usp{background:#173b7a}
 .exam-badge-unicamp{background:#7f1d3a}
+.study-stage-badge{display:inline-flex;align-items:center;justify-content:center;min-width:36px;height:18px;padding:0 7px;border-radius:999px;border:1px solid #d0d5dd;background:#fff;color:#344054;font-size:10px;font-weight:950;line-height:1;box-shadow:0 1px 2px #1018281a}
+.study-stage-badge.stage-new{background:#f8fafc;color:#475467;border-color:#d0d5dd}
+.study-stage-badge.stage-level-10m{background:#fff1f3;color:#b42318;border-color:#fecdca}
+.study-stage-badge.stage-level-2{background:#fffaeb;color:#b54708;border-color:#fedf89}
+.study-stage-badge.stage-level-3{background:#eef4ff;color:#2f5bea;border-color:#c7d7fe}
+.study-stage-badge.stage-level-4{background:#eff8ff;color:#175cd3;border-color:#b2ddff}
+.study-stage-badge.stage-level-5{background:#f4f3ff;color:#6941c6;border-color:#d9d6fe}
+.study-stage-badge.stage-level-6{background:#ecfdf3;color:#067647;border-color:#abefc6}
+.study-stage-badge.stage-learned{background:#d1fadf;color:#05603a;border-color:#6ce9a6}
 .question-html{font-size:25px;font-weight:850;line-height:1.25;margin-bottom:12px}
 .question-html img,.answer-box img,.mini img{max-width:100%;max-height:320px;border-radius:10px;margin:12px 0;border:1px solid #e5e7eb}
 textarea{min-height:150px;resize:vertical}

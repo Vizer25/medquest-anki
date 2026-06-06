@@ -927,52 +927,52 @@ function historyItemDayKey(item) {
   return String(item.date || '').slice(0, 10)
 }
 
+function isAnsweredHistoryItem(item) {
+  if (!item?.id) return false
+  if (typeof item.correct === 'boolean') return true
+  if (Number.isFinite(Number(item.percent))) return true
+  return ['again', 'hard', 'good', 'easy'].includes(String(item.grade || ''))
+}
+
 function uniqueHistoryIdsForDay(stats, dayKey) {
   return Array.from(new Set(
     (stats.history || [])
-      .filter(item => historyItemDayKey(item) === dayKey && item.id)
+      .filter(item => isAnsweredHistoryItem(item) && historyItemDayKey(item) === dayKey)
       .map(item => item.id)
   ))
 }
 
 function dailyUniqueCount(stats, dayKey) {
-  const seen = Array.isArray(stats.dailySeen?.[dayKey]) ? stats.dailySeen[dayKey] : []
-  if (seen.length) return new Set(seen.filter(Boolean)).size
-
   const historyIds = uniqueHistoryIdsForDay(stats, dayKey)
   if (historyIds.length) return historyIds.length
 
-  return Number(stats.daily?.[dayKey] || 0)
+  return 0
+}
+
+function dailyAnswerCount(stats, dayKey) {
+  return (stats.history || []).filter(item => isAnsweredHistoryItem(item) && historyItemDayKey(item) === dayKey).length
 }
 
 function dailyNewCardCount(stats, dayKey) {
-  const history = stats.history || []
-  const firstDayByCard = new Map()
-  const explicitlyNewToday = new Set()
-
-  history.forEach(item => {
-    if (!item?.id) return
-    const itemDay = historyItemDayKey(item)
-    if (!firstDayByCard.has(item.id)) firstDayByCard.set(item.id, itemDay)
-    if (item.isNewCard && itemDay === dayKey) explicitlyNewToday.add(item.id)
+  const answered = (stats.history || []).filter(isAnsweredHistoryItem)
+  const firstIndexByCard = new Map()
+  answered.forEach((item, index) => {
+    if (!firstIndexByCard.has(item.id)) firstIndexByCard.set(item.id, index)
   })
 
-  let count = explicitlyNewToday.size
-  firstDayByCard.forEach((firstDay, cardId) => {
-    if (firstDay === dayKey) explicitlyNewToday.add(cardId)
-  })
-  count = explicitlyNewToday.size
-
-  return count
+  return answered.filter((item, index) => {
+    if (historyItemDayKey(item) !== dayKey) return false
+    return item.isNewCard === true || (item.isNewCard == null && firstIndexByCard.get(item.id) === index)
+  }).length
 }
 
 function historyCardIds(stats) {
-  return new Set((stats.history || []).map(item => item?.id).filter(Boolean))
+  return new Set((stats.history || []).filter(isAnsweredHistoryItem).map(item => item.id))
 }
 
 function reviewRatioStreak(stats) {
   const today = todayKey()
-  const todayHistory = (stats.history || []).filter(item => historyItemDayKey(item) === today)
+  const todayHistory = (stats.history || []).filter(item => isAnsweredHistoryItem(item) && historyItemDayKey(item) === today)
   let reviews = 0
 
   for (let index = todayHistory.length - 1; index >= 0; index -= 1) {
@@ -2710,12 +2710,13 @@ export default function App() {
   const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
   const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
   const currentView = current ? getCardView(current) : null
+  const currentStageBadge = current ? reviewStageDetails(current) : null
   const currentTagText = normalize(String(current?.tags || ''))
   const currentExamBadges = [
     currentTagText.includes('usp') ? { key: 'usp', label: 'USP' } : null,
     currentTagText.includes('unicamp') ? { key: 'unicamp', label: 'Unicamp' } : null
   ].filter(Boolean)
-  const todayDone = dailyUniqueCount(stats, todayKey())
+  const todayDone = dailyAnswerCount(stats, todayKey())
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
@@ -2745,7 +2746,7 @@ export default function App() {
     return {
       key,
       label: key.slice(5).replace('-', '/'),
-      count: dailyUniqueCount(stats, key),
+      count: dailyAnswerCount(stats, key),
       avgPercent
     }
   })
@@ -3182,6 +3183,9 @@ export default function App() {
     const grade = percent < 60 ? 'again' : percent < 80 ? 'hard' : percent < 90 ? 'good' : 'easy'
     const isCorrect = percent >= 80
     const xpDelta = isCorrect ? Math.max(5, Math.round(25 * percent / 100)) : -5
+    const scheduledCard = scheduleCard(current, grade)
+
+    setCards(prev => prev.map(card => card.id === current.id ? scheduledCard : card))
 
     setStats(prevRaw => {
       const prev = safeStats(prevRaw)
@@ -3235,7 +3239,8 @@ export default function App() {
       correct: isCorrect,
       seconds: cardSeconds,
       answeredAt: new Date().toISOString(),
-      isNewCard
+      isNewCard,
+      scheduledCard
     })
     const nextSchedule = previewSchedule(current, grade, config.fsrsRetention)
     const scheduleLabel = nextSchedule.label
@@ -3254,7 +3259,7 @@ export default function App() {
 
   function nextCard() {
     const updatedCards = pendingGrade
-      ? cards.map(c => c.id === pendingGrade.cardId ? scheduleCard(c, pendingGrade.grade) : c)
+      ? cards.map(c => c.id === pendingGrade.cardId ? (pendingGrade.scheduledCard || scheduleCard(c, pendingGrade.grade)) : c)
       : cards
     const syncedCard = pendingGrade ? updatedCards.find(c => c.id === pendingGrade.cardId) : null
     const statsForQueue = pendingGrade
@@ -3264,6 +3269,9 @@ export default function App() {
             ...(safeStats(stats).history || []),
             {
               id: pendingGrade.cardId,
+              percent: pendingGrade.percent,
+              grade: pendingGrade.grade,
+              correct: pendingGrade.correct,
               isNewCard: pendingGrade.isNewCard || false,
               day: todayKey(),
               date: pendingGrade.answeredAt || new Date().toISOString()
@@ -4013,8 +4021,11 @@ export default function App() {
             </div>
           ) : (
             <>
-              {currentExamBadges.length > 0 && (
+              {(currentStageBadge || currentExamBadges.length > 0) && (
                 <div className="exam-badges" aria-label="Tags de prova">
+                  {currentStageBadge && (
+                    <span className={`study-stage-badge ${currentStageBadge.className}`}>{currentStageBadge.label}</span>
+                  )}
                   {currentExamBadges.map(badge => (
                     <span className={`exam-badge exam-badge-${badge.key}`} key={badge.key}>{badge.label}</span>
                   ))}
