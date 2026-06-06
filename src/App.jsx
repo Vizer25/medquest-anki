@@ -1791,6 +1791,17 @@ function mergeCardSources(...sources) {
   return merged
 }
 
+function cloudDiffCards(cloudCards = [], localCards = []) {
+  const cloudById = new Map(cloudCards.filter(Boolean).map(card => [String(card.id || card.card_id || ''), card]))
+  return localCards.filter(card => {
+    const id = String(card?.id || '')
+    if (!id) return false
+    const cloud = cloudById.get(id)
+    if (!cloud) return true
+    return contentTimestamp(card) > contentTimestamp(cloud) || cardProgressScore(card) > cardProgressScore(cloud)
+  })
+}
+
 function cardAddedScore(card) {
   const dateScore = ['createdAt', 'sourceUpdatedAt', 'manualEditedAt', 'importedAt']
     .map(key => new Date(card?.[key] || '').getTime())
@@ -2480,7 +2491,7 @@ export default function App() {
 
     if (shouldMergeLocal) {
       cardsToUse = mergeCardSources(data.cards, seedCards)
-      setSyncStatus(`${token === FIREBASE_CLOUD_TOKEN ? 'Firebase' : 'Nuvem'} mesclando deck local: ${activeCardCount(cardsToUse)} cards preservados. Sincronizando...`)
+      setSyncStatus(`${token === FIREBASE_CLOUD_TOKEN ? 'Firebase' : 'Nuvem'} sincronizado. Deck local preservado.`)
     }
 
     if (hasCloudCards || hasLocalCards) setCards(cardsToUse)
@@ -2495,7 +2506,10 @@ export default function App() {
     }
 
     if (shouldMergeLocal) {
-      syncCardsInChunks(cardsToUse, 'Deck local preservado', authedUser, token)
+      const diffCards = cloudDiffCards(data.cards, seedCards)
+      if (diffCards.length) {
+        syncCardsInChunks(diffCards, `${diffCards.length} diferencas locais`, authedUser, token)
+      }
       if (hasCloudStats) saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data.stats, seedStats)).catch(err => console.warn('Stats merge adiado.', err))
       return
     }
