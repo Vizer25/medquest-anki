@@ -1,5 +1,28 @@
 import { createClient } from '@supabase/supabase-js'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { initializeApp } from 'firebase/app'
+import {
+  browserLocalPersistence,
+  browserSessionPersistence,
+  createUserWithEmailAndPassword,
+  getAuth,
+  onAuthStateChanged,
+  setPersistence,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut
+} from 'firebase/auth'
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  setDoc,
+  writeBatch
+} from 'firebase/firestore'
 import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs'
 import JSZip from 'jszip'
 import initSqlJs from 'sql.js'
@@ -15,6 +38,7 @@ const LOCAL_DB_NAME = 'medquest-local-vault'
 const LOCAL_DB_VERSION = 1
 const LOCAL_STATE_KEY = 'state'
 const LOCAL_SYNC_OUTBOX_KEY = 'sync-outbox'
+const FIREBASE_CLOUD_TOKEN = 'firebase-firestore'
 const authStorage = {
   getItem(key) {
     try {
@@ -59,6 +83,28 @@ const supabase = createClient(
     }
   }
 )
+
+const firebaseConfig = {
+  apiKey: 'AIzaSyDm_rFReH_w4Div-vngi_ozCfaJFL90sbE',
+  authDomain: 'medquest-e9e54.firebaseapp.com',
+  projectId: 'medquest-e9e54',
+  storageBucket: 'medquest-e9e54.firebasestorage.app',
+  messagingSenderId: '1064594596834',
+  appId: '1:1064594596834:web:9c14eaccadaa0331a64fbb',
+  measurementId: 'G-E4EC4GCBWE'
+}
+
+const firebaseApp = initializeApp(firebaseConfig)
+const firebaseAuth = getAuth(firebaseApp)
+let firestoreDb
+try {
+  firestoreDb = initializeFirestore(firebaseApp, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  })
+} catch {
+  firestoreDb = getFirestore(firebaseApp)
+}
+
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
 const DEFAULT_FSRS_RETENTION = 0.91
@@ -297,6 +343,134 @@ async function queueLocalSyncItems(itemsToQueue) {
   const queued = [...byId.values()]
   await writeLocalSyncOutbox(queued)
   return queued.length
+}
+
+function cleanCloudValue(value) {
+  return JSON.parse(JSON.stringify(value ?? null))
+}
+
+function cloudUserId(authedUser = {}) {
+  return String(authedUser.uid || authedUser.id || '')
+}
+
+function firestoreCardRef(userId, cardId) {
+  return doc(firestoreDb, 'users', userId, 'cards', String(cardId))
+}
+
+function firestoreUserRef(userId) {
+  return doc(firestoreDb, 'users', userId)
+}
+
+function firestoreEventId(card, event = {}) {
+  const raw = `${card?.id || 'card'}_${event.answeredAt || event.date || Date.now()}_${event.grade || ''}`
+  return raw.replace(/[^\w.-]+/g, '_').slice(0, 180)
+}
+
+function waitForFirebaseUser(timeoutMs = 3000) {
+  return new Promise(resolve => {
+    let settled = false
+    let unsubscribe = () => {}
+    const finish = user => {
+      if (settled) return
+      settled = true
+      unsubscribe()
+      resolve(user || null)
+    }
+    unsubscribe = onAuthStateChanged(firebaseAuth, finish, () => finish(null))
+    window.setTimeout(() => finish(firebaseAuth.currentUser), timeoutMs)
+  })
+}
+
+async function getFirebaseProfile(authedUser) {
+  const userId = cloudUserId(authedUser)
+  if (!userId) return null
+
+  const [userSnap, cardSnaps] = await Promise.all([
+    getDoc(firestoreUserRef(userId)),
+    getDocs(collection(firestoreDb, 'users', userId, 'cards'))
+  ])
+
+  const userData = userSnap.exists() ? userSnap.data() : {}
+  const cards = []
+  cardSnaps.forEach(snapshot => {
+    const data = snapshot.data()
+    const payload = data?.payload && typeof data.payload === 'object' ? data.payload : data
+    if (payload?.id) cards.push(payload)
+  })
+
+  return {
+    cards,
+    stats: userData?.stats && typeof userData.stats === 'object' ? userData.stats : null,
+    firebaseReady: true,
+    email: userData?.email || authedUser.email || null
+  }
+}
+
+async function saveFirebaseProfile(authedUser, nextCards, nextStats) {
+  const userId = cloudUserId(authedUser)
+  if (!userId) throw new Error('Usuario Firebase invalido.')
+
+  const payload = {
+    email: authedUser.email || '',
+    updatedAt: new Date().toISOString()
+  }
+  if (nextStats && typeof nextStats === 'object') payload.stats = cleanCloudValue(nextStats)
+
+  await setDoc(firestoreUserRef(userId), payload, { merge: true })
+
+  if (Array.isArray(nextCards) && nextCards.length) {
+    await saveFirebaseCardsBatch(authedUser, nextCards)
+  }
+}
+
+async function saveFirebaseCard(authedUser, card, event = null) {
+  const userId = cloudUserId(authedUser)
+  if (!userId || !card?.id) throw new Error('Card Firebase invalido.')
+
+  await setDoc(firestoreCardRef(userId, card.id), {
+    payload: cleanCloudValue(card),
+    updatedAt: new Date().toISOString(),
+    manualEditedAt: card.manualEditedAt || null,
+    dueAt: card.dueAt ?? null,
+    reviewLevel: Number(card.reviewLevel || 0),
+    correctCount: Number(card.correctCount || 0),
+    reviewAttempts: Number(card.reviewAttempts || card.siteReps || 0),
+    deleted: !!card.deleted,
+    suspended: !!card.suspended
+  }, { merge: true })
+
+  if (event) {
+    await setDoc(doc(firestoreDb, 'users', userId, 'reviewEvents', firestoreEventId(card, event)), {
+      ...cleanCloudValue(event),
+      cardId: card.id,
+      answeredAt: event.answeredAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }, { merge: true })
+  }
+}
+
+async function saveFirebaseCardsBatch(authedUser, cardBatch) {
+  const userId = cloudUserId(authedUser)
+  const cards = Array.isArray(cardBatch) ? cardBatch.filter(card => card?.id) : []
+  if (!userId || !cards.length) return
+
+  for (let start = 0; start < cards.length; start += 450) {
+    const batch = writeBatch(firestoreDb)
+    cards.slice(start, start + 450).forEach(card => {
+      batch.set(firestoreCardRef(userId, card.id), {
+        payload: cleanCloudValue(card),
+        updatedAt: new Date().toISOString(),
+        manualEditedAt: card.manualEditedAt || null,
+        dueAt: card.dueAt ?? null,
+        reviewLevel: Number(card.reviewLevel || 0),
+        correctCount: Number(card.correctCount || 0),
+        reviewAttempts: Number(card.reviewAttempts || card.siteReps || 0),
+        deleted: !!card.deleted,
+        suspended: !!card.suspended
+      }, { merge: true })
+    })
+    await batch.commit()
+  }
 }
 
 function addCalendarDaysTimestamp(timestamp, days) {
@@ -2019,6 +2193,8 @@ export default function App() {
 
   async function getProfileThroughProxy(authedUser, token) {
     if (!token) return null
+    if (token === FIREBASE_CLOUD_TOKEN) return getFirebaseProfile(authedUser)
+
     const response = await fetch(`/api/profile?id=${encodeURIComponent(authedUser.id)}`, {
       headers: { authorization: `Bearer ${token}` }
     })
@@ -2029,6 +2205,11 @@ export default function App() {
 
   async function saveProfileThroughProxy(authedUser, token, nextCards, nextStats) {
     if (!token) throw new Error('Sessao sem token.')
+    if (token === FIREBASE_CLOUD_TOKEN) {
+      await saveFirebaseProfile(authedUser, nextCards, nextStats)
+      return { ok: true, provider: 'firebase' }
+    }
+
     const payload = {
       id: authedUser.id,
       email: authedUser.email
@@ -2051,6 +2232,11 @@ export default function App() {
 
   async function syncReviewThroughProxy(card, event, authUser = user, token = sessionToken) {
     if (!authUser || !token || !card?.id) return
+    if (token === FIREBASE_CLOUD_TOKEN) {
+      await saveFirebaseCard(authUser, card, event)
+      return { ok: true, provider: 'firebase' }
+    }
+
     const response = await fetch('/api/sync-review', {
       method: 'POST',
       headers: {
@@ -2071,6 +2257,11 @@ export default function App() {
 
   async function syncCardsBatchThroughProxy(cardBatch, authUser = user, token = sessionToken) {
     if (!authUser || !token || !cardBatch?.length) return null
+    if (token === FIREBASE_CLOUD_TOKEN) {
+      await saveFirebaseCardsBatch(authUser, cardBatch)
+      return { ok: true, synced: cardBatch.length, provider: 'firebase' }
+    }
+
     const response = await fetch('/api/sync-cards', {
       method: 'POST',
       headers: {
@@ -2105,7 +2296,7 @@ export default function App() {
       .catch(err => {
         console.warn('Sincronizacao granular adiada.', err)
         queueLocalSyncItems({ card, event }).catch(queueErr => console.warn('Nao foi possivel enfileirar sincronizacao.', queueErr))
-        setSyncStatus('Supabase instavel. Progresso mantido neste navegador e tentarei de novo depois.')
+        setSyncStatus('Nuvem instavel. Progresso mantido neste navegador e tentarei de novo depois.')
       })
   }
 
@@ -2129,7 +2320,7 @@ export default function App() {
     } catch (err) {
       console.warn('Nao foi possivel drenar fila local.', err)
       const queued = await readLocalSyncOutbox().catch(() => [])
-      if (queued.length) setSyncStatus(`${queued.length} salvamentos locais aguardando Supabase.`)
+      if (queued.length) setSyncStatus(`${queued.length} salvamentos locais aguardando a nuvem.`)
     } finally {
       drainingSyncOutbox.current = false
     }
@@ -2150,7 +2341,7 @@ export default function App() {
       await queueLocalSyncItems(cardsToSync.map(card => ({ card }))).catch(queueErr => {
         console.warn('Nao foi possivel enfileirar lote local.', queueErr)
       })
-      setSyncStatus('Supabase instavel. Importacao ficou salva neste navegador; tente sincronizar depois.')
+      setSyncStatus('Nuvem instavel. Importacao ficou salva neste navegador; tentarei sincronizar depois.')
     }
   }
 
@@ -2273,6 +2464,24 @@ export default function App() {
       }
 
       try {
+        const firebaseUser = await waitForFirebaseUser()
+        if (firebaseUser) {
+          withTimeout(
+            loadCloudProgress(firebaseUser, nextCards, nextStats, FIREBASE_CLOUD_TOKEN),
+            8000,
+            'Tempo limite ao sincronizar Firebase'
+          ).catch(err => {
+            console.error(err)
+            if (active) setSyncStatus('Nao consegui sincronizar Firebase agora. Usando progresso local.')
+          })
+          if (active) {
+            setUser(firebaseUser)
+            setSessionToken(FIREBASE_CLOUD_TOKEN)
+            setLogged(true)
+          }
+          return
+        }
+
         const { data } = await withTimeout(
           supabase.auth.getSession(),
           5000,
@@ -2603,7 +2812,7 @@ export default function App() {
         await saveProfileThroughProxy(user, sessionToken, undefined, stats)
       } catch (err) {
         console.warn('Nao foi possivel salvar estatisticas agora.', err)
-        setSyncStatus('Supabase instavel. Estatisticas ficaram salvas neste navegador.')
+        setSyncStatus('Nuvem instavel. Estatisticas ficaram salvas neste navegador.')
       }
     }, 12000)
 
@@ -2707,42 +2916,63 @@ export default function App() {
     clearStoredAuthSession()
 
     try {
-      let authResult
+      await setPersistence(firebaseAuth, rememberLogin ? browserLocalPersistence : browserSessionPersistence)
+      let firebaseCredential
       try {
-        authResult = await withTimeout(
-          supabase.auth.signInWithPassword({
-            email,
-            password: senha
-          }),
+        firebaseCredential = await withTimeout(
+          signInWithEmailAndPassword(firebaseAuth, email, senha),
           12000,
-          'Tempo limite ao fazer login direto'
+          'Tempo limite ao fazer login no Firebase'
         )
-      } catch (directErr) {
-        console.warn('Login direto falhou, tentando proxy do site.', directErr)
-        authResult = { data: await loginThroughProxy(email, senha), error: null }
+      } catch (firebaseErr) {
+        const code = firebaseErr?.code || ''
+        if (/user-not-found|invalid-credential/i.test(code)) {
+          firebaseCredential = await withTimeout(
+            createUserWithEmailAndPassword(firebaseAuth, email, senha),
+            12000,
+            'Tempo limite ao criar conta no Firebase'
+          )
+        } else {
+          throw firebaseErr
+        }
       }
 
-      if (authResult?.error && /failed to fetch|fetch|network|tempo limite/i.test(authResult.error.message || '')) {
-        console.warn('Login direto retornou erro de rede, tentando proxy do site.', authResult.error)
-        authResult = { data: await loginThroughProxy(email, senha), error: null }
-      }
-
-      const { data, error } = authResult
-
-      if (error || !data.user) {
-        setFeedback({ type: 'bad', text: authErrorMessage(error) })
+      const firebaseUser = firebaseCredential?.user
+      if (!firebaseUser) {
+        setFeedback({ type: 'bad', text: 'Nao consegui autenticar no Firebase.' })
         return
       }
 
-      const token = data.session?.access_token || data.access_token || ''
-      setUser(data.user)
-      setSessionToken(token)
+      let migratedCards = cards
+      let migratedStats = stats
+      try {
+        const oldData = await loginThroughProxy(email, senha)
+        const oldToken = oldData.session?.access_token || oldData.access_token || ''
+        const oldUser = oldData.user
+        if (oldUser && oldToken) {
+          const oldProfile = await getProfileThroughProxy(oldUser, oldToken)
+          if (Array.isArray(oldProfile?.cards) && oldProfile.cards.length) {
+            migratedCards = mergeCardSources(oldProfile.cards, cards)
+          }
+          if (oldProfile?.stats) {
+            migratedStats = mergeStatsSources(oldProfile.stats, stats)
+          }
+          await saveFirebaseProfile(firebaseUser, migratedCards, migratedStats)
+          setSyncStatus('Firebase conectado. Backup antigo migrado para a nova nuvem.')
+        }
+      } catch (migrationErr) {
+        console.warn('Migracao Supabase -> Firebase adiada.', migrationErr)
+        setSyncStatus('Firebase conectado. Backup antigo do Supabase sera tentado depois.')
+      }
+
+      setUser(firebaseUser)
+      setSessionToken(FIREBASE_CLOUD_TOKEN)
       setLogged(true)
       setSenha('')
       setFeedback(null)
 
       withTimeout(
-        loadCloudProgress(data.user, cards, stats, token),
+        loadCloudProgress(firebaseUser, migratedCards, migratedStats, FIREBASE_CLOUD_TOKEN),
         15000,
         'Tempo limite ao carregar progresso'
       ).catch(err => {
@@ -2759,6 +2989,7 @@ export default function App() {
 
   async function cloudLogout() {
     if (user) {
+      await firebaseSignOut(firebaseAuth).catch(err => console.warn('Nao foi possivel encerrar Firebase.', err))
       await supabase.auth.signOut().catch(err => console.warn('Nao foi possivel encerrar sessao remota.', err))
     }
     clearStoredAuthSession()
