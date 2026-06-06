@@ -2380,7 +2380,7 @@ export default function App() {
 
     if (shouldMergeLocal) {
       cardsToUse = mergeCardSources(data.cards, seedCards)
-      setSyncStatus(`Mesclando deck local e nuvem: ${activeCardCount(cardsToUse)} cards preservados. Sincronizando...`)
+      setSyncStatus(`${token === FIREBASE_CLOUD_TOKEN ? 'Firebase' : 'Nuvem'} mesclando deck local: ${activeCardCount(cardsToUse)} cards preservados. Sincronizando...`)
     }
 
     if (hasCloudCards || hasLocalCards) setCards(cardsToUse)
@@ -2412,13 +2412,13 @@ export default function App() {
             stats: seedStats
           })
       }
-      setSyncStatus('Conta pronta. Cards serao salvos de forma granular ao estudar.')
+      setSyncStatus(token === FIREBASE_CLOUD_TOKEN ? 'Firebase conectado. Cards serao salvos na nova nuvem.' : 'Conta pronta. Cards serao salvos de forma granular ao estudar.')
       return
     }
 
     if (data?.granularReady === false) return
 
-    setSyncStatus('Progresso sincronizado.')
+    setSyncStatus(token === FIREBASE_CLOUD_TOKEN ? 'Firebase sincronizado.' : 'Progresso sincronizado.')
   }
 
   useEffect(() => {
@@ -2482,37 +2482,7 @@ export default function App() {
           return
         }
 
-        const { data } = await withTimeout(
-          supabase.auth.getSession(),
-          5000,
-          'Tempo limite ao carregar sessao'
-        )
-        const sessionUser = data.session?.user || null
-
-        if (active) {
-          setCards(nextCards)
-          setConfig(nextConfig)
-          setStats(nextStats)
-          if (nextLastAnswered) setLastAnsweredId(nextLastAnswered)
-          if (nextCurrentCardId) setCurrentCardId(nextCurrentCardId)
-        }
-
-        if (sessionUser) {
-          const token = data.session?.access_token || ''
-          withTimeout(
-            loadCloudProgress(sessionUser, nextCards, nextStats, token),
-            8000,
-            'Tempo limite ao sincronizar progresso'
-          ).catch(err => {
-            console.error(err)
-            if (active) setSyncStatus('Nao consegui sincronizar agora. Usando progresso local.')
-          })
-          if (active) {
-            setUser(sessionUser)
-            setSessionToken(token)
-            setLogged(true)
-          }
-        }
+        clearStoredAuthSession()
       } catch (err) {
         console.error(err)
         if (active) {
