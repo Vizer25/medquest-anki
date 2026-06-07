@@ -3154,8 +3154,10 @@ export default function App() {
     const yesterday = dateKey(new Date(Date.now() - DAY))
     const dailySeen = { ...(oldStats.dailySeen || {}), [t]: nextSeen }
     const daily = { ...(oldStats.daily || {}), [t]: nextSeen.length }
-    const dailyAnswers = { ...(oldStats.dailyAnswers || {}), [t]: Number(oldStats.dailyAnswers?.[t] || 0) + 1 }
-    const dailyNewAnswers = { ...(oldStats.dailyNewAnswers || {}), [t]: Number(oldStats.dailyNewAnswers?.[t] || 0) + (isNewCard ? 1 : 0) }
+    const answeredTodayFromHistory = (oldStats.history || []).filter(item => isAnsweredHistoryItem(item) && historyItemDayKey(item) === t).length
+    const newTodayFromHistory = (oldStats.history || []).filter(item => isAnsweredHistoryItem(item) && historyItemDayKey(item) === t && item.isNewCard === true).length
+    const dailyAnswers = { ...(oldStats.dailyAnswers || {}), [t]: Math.max(Number(oldStats.dailyAnswers?.[t] || 0), answeredTodayFromHistory) + 1 }
+    const dailyNewAnswers = { ...(oldStats.dailyNewAnswers || {}), [t]: Math.max(Number(oldStats.dailyNewAnswers?.[t] || 0), newTodayFromHistory) + (isNewCard ? 1 : 0) }
     let studyStreak = oldStats.studyStreak || 0
     let lastStudyDate = oldStats.lastStudyDate || ''
 
@@ -3497,13 +3499,26 @@ export default function App() {
     const correctedGrade = 'good'
 
     const nextSchedule = previewSchedule(current, correctedGrade, config.fsrsRetention)
+    const correctedCard = scheduleCard(current, correctedGrade)
+    setCards(prev => prev.map(card => card.id === current.id ? correctedCard : card))
+    syncOneCard(correctedCard, {
+      cardId: current.id,
+      grade: correctedGrade,
+      percent: 80,
+      correct: true,
+      seconds: pendingGrade?.seconds ?? cardSeconds,
+      answeredAt: pendingGrade?.answeredAt || new Date().toISOString(),
+      manuallyCorrected: true,
+      isNewCard: pendingGrade?.isNewCard || false
+    })
     setPendingGrade(prev => ({
       ...(prev || {}),
       cardId: current.id,
       grade: correctedGrade,
       percent: 80,
       correct: true,
-      answeredAt: prev?.answeredAt || new Date().toISOString()
+      answeredAt: prev?.answeredAt || new Date().toISOString(),
+      scheduledCard: correctedCard
     }))
     setFeedback(prev => prev ? {
       ...prev,
@@ -3560,6 +3575,18 @@ export default function App() {
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'again'
     const nextSchedule = previewSchedule(current, correctedGrade, config.fsrsRetention)
+    const correctedCard = scheduleCard(current, correctedGrade)
+    setCards(prev => prev.map(card => card.id === current.id ? correctedCard : card))
+    syncOneCard(correctedCard, {
+      cardId: current.id,
+      grade: correctedGrade,
+      percent: 0,
+      correct: false,
+      seconds: pendingGrade?.seconds ?? cardSeconds,
+      answeredAt: pendingGrade?.answeredAt || new Date().toISOString(),
+      manuallyCorrected: true,
+      isNewCard: pendingGrade?.isNewCard || false
+    })
 
     setPendingGrade(prev => ({
       ...(prev || {}),
@@ -3567,7 +3594,8 @@ export default function App() {
       grade: correctedGrade,
       percent: 0,
       correct: false,
-      answeredAt: prev?.answeredAt || new Date().toISOString()
+      answeredAt: prev?.answeredAt || new Date().toISOString(),
+      scheduledCard: correctedCard
     }))
     setFeedback(prev => prev ? {
       ...prev,
