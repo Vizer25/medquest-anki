@@ -311,10 +311,32 @@ async function writeLocalVault(key, value) {
   })
 }
 
+async function deleteLocalVaultKeysByPrefix(prefix) {
+  const db = await openLocalDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readwrite')
+    const store = tx.objectStore('kv')
+    const request = store.openCursor()
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      if (String(cursor.key || '').startsWith(prefix)) cursor.delete()
+      cursor.continue()
+    }
+    tx.oncomplete = () => {
+      db.close()
+      resolve()
+    }
+    tx.onerror = () => {
+      db.close()
+      reject(tx.error)
+    }
+  })
+}
+
 async function saveLocalStateSnapshot(snapshot) {
   const now = new Date().toISOString()
   await writeLocalVault(LOCAL_STATE_KEY, { ...snapshot, savedAt: now })
-  await writeLocalVault(`backup:${now}`, { ...snapshot, savedAt: now })
 }
 
 async function readLocalSyncOutbox() {
@@ -2283,6 +2305,8 @@ export default function App() {
   const [libraryEditingId, setLibraryEditingId] = useState(null)
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
+  const editFrontRef = useRef('')
+  const editBackRef = useRef('')
   const [tab, setTab] = useState('study')
   const [siteSeconds, setSiteSeconds] = useState(0)
   const [cardSeconds, setCardSeconds] = useState(0)
@@ -2629,6 +2653,7 @@ export default function App() {
         if (!vault?.stats && savedStats) nextStats = safeStats(JSON.parse(savedStats))
         if (!vault?.lastAnsweredId && savedLastAnswered) nextLastAnswered = savedLastAnswered
         if (!vault?.currentCardId && savedCurrentCardId) nextCurrentCardId = savedCurrentCardId
+        deleteLocalVaultKeysByPrefix('backup:').catch(err => console.warn('Limpeza de backups locais antigos adiada.', err))
       } catch {
         localStorage.removeItem('mq_stats')
       }
@@ -3528,6 +3553,57 @@ export default function App() {
     }
   }
 
+  function buildManualCorrectionStats(prevRaw, cardId, previousGrade, correctedGrade, correctedPercent, correctedCorrect, wasCorrect) {
+    const prev = safeStats(prevRaw)
+    const history = [...(prev.history || [])]
+    const lastIndex = history.map(item => item.id).lastIndexOf(cardId)
+    if (lastIndex >= 0) {
+      history[lastIndex] = {
+        ...history[lastIndex],
+        percent: correctedPercent,
+        grade: correctedGrade,
+        correct: correctedCorrect,
+        manuallyCorrected: true
+      }
+    }
+
+    const byGrade = { ...prev.byGrade }
+    if (byGrade[previousGrade] > 0) byGrade[previousGrade] -= 1
+    byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + 1
+
+    const nextCorrect = correctedCorrect
+      ? (prev.correct || 0) + (wasCorrect ? 0 : 1)
+      : Math.max(0, (prev.correct || 0) - (wasCorrect ? 1 : 0))
+    const nextWrong = correctedCorrect
+      ? Math.max(0, (prev.wrong || 0) - (wasCorrect ? 0 : 1))
+      : (prev.wrong || 0) + (wasCorrect ? 1 : 0)
+    const nextStreak = correctedCorrect
+      ? (wasCorrect ? prev.streak : Math.max(1, prev.streak || 0))
+      : (wasCorrect ? 0 : prev.streak)
+    const previousMastery = prev.masteryByCard?.[cardId] || {}
+
+    return {
+      ...prev,
+      correct: nextCorrect,
+      wrong: nextWrong,
+      streak: nextStreak,
+      record: Math.max(prev.record || 0, nextStreak || 0),
+      history,
+      masteryByCard: {
+        ...(prev.masteryByCard || {}),
+        [cardId]: {
+          ...previousMastery,
+          bestPercent: Math.max(Number(previousMastery.bestPercent || 0), correctedPercent),
+          lastPercent: correctedPercent,
+          lastGrade: correctedGrade,
+          manuallyCorrected: true,
+          updatedAt: new Date().toISOString()
+        }
+      },
+      byGrade
+    }
+  }
+
   function markCurrentAsCorrect() {
     if (!current || !feedback || feedback.cardId !== current.id) return
     const previousGrade = feedback.grade || pendingGrade?.grade || 'again'
@@ -3538,8 +3614,10 @@ export default function App() {
     const nextSchedule = previewSchedule(cardToCorrect, correctedGrade, config.fsrsRetention)
     const correctedCard = scheduleCard(cardToCorrect, correctedGrade)
     const nextCardsAfterCorrection = cards.map(card => card.id === current.id ? correctedCard : card)
+    const nextStatsAfterCorrection = buildManualCorrectionStats(stats, current.id, previousGrade, correctedGrade, 80, true, wasCorrect)
     setCards(nextCardsAfterCorrection)
-    persistLocalStateNow(nextCardsAfterCorrection, stats)
+    setStats(nextStatsAfterCorrection)
+    persistLocalStateNow(nextCardsAfterCorrection, nextStatsAfterCorrection)
     syncOneCard(correctedCard, {
       cardId: current.id,
       grade: correctedGrade,
@@ -3569,43 +3647,6 @@ export default function App() {
       scheduleLabel: nextSchedule.label
     } : prev)
 
-    setStats(prevRaw => {
-      const prev = safeStats(prevRaw)
-      const history = [...(prev.history || [])]
-      const lastIndex = history.map(item => item.id).lastIndexOf(current.id)
-      if (lastIndex >= 0) {
-        history[lastIndex] = {
-          ...history[lastIndex],
-          percent: 80,
-          grade: correctedGrade,
-          correct: true,
-          manuallyCorrected: true
-        }
-      }
-      const byGrade = { ...prev.byGrade }
-      if (byGrade[previousGrade] > 0) byGrade[previousGrade] -= 1
-      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + 1
-
-      return {
-        ...prev,
-        correct: (prev.correct || 0) + (wasCorrect ? 0 : 1),
-        wrong: Math.max(0, (prev.wrong || 0) - (wasCorrect ? 0 : 1)),
-        streak: wasCorrect ? prev.streak : Math.max(1, prev.streak || 0),
-        record: Math.max(prev.record || 0, wasCorrect ? prev.streak || 0 : Math.max(1, prev.streak || 0)),
-        history,
-        masteryByCard: {
-          ...(prev.masteryByCard || {}),
-          [current.id]: {
-            bestPercent: Math.max(Number(prev.masteryByCard?.[current.id]?.bestPercent || 0), 80),
-            lastPercent: 80,
-            lastGrade: correctedGrade,
-            manuallyCorrected: true,
-            updatedAt: new Date().toISOString()
-          }
-        },
-        byGrade
-      }
-    })
   }
 
   function markCurrentAsWrong() {
@@ -3617,8 +3658,10 @@ export default function App() {
     const nextSchedule = previewSchedule(cardToCorrect, correctedGrade, config.fsrsRetention)
     const correctedCard = scheduleCard(cardToCorrect, correctedGrade)
     const nextCardsAfterCorrection = cards.map(card => card.id === current.id ? correctedCard : card)
+    const nextStatsAfterCorrection = buildManualCorrectionStats(stats, current.id, previousGrade, correctedGrade, 0, false, wasCorrect)
     setCards(nextCardsAfterCorrection)
-    persistLocalStateNow(nextCardsAfterCorrection, stats)
+    setStats(nextStatsAfterCorrection)
+    persistLocalStateNow(nextCardsAfterCorrection, nextStatsAfterCorrection)
     syncOneCard(correctedCard, {
       cardId: current.id,
       grade: correctedGrade,
@@ -3649,42 +3692,6 @@ export default function App() {
       scheduleLabel: nextSchedule.label
     } : prev)
 
-    setStats(prevRaw => {
-      const prev = safeStats(prevRaw)
-      const history = [...(prev.history || [])]
-      const lastIndex = history.map(item => item.id).lastIndexOf(current.id)
-      if (lastIndex >= 0) {
-        history[lastIndex] = {
-          ...history[lastIndex],
-          percent: 0,
-          grade: correctedGrade,
-          correct: false,
-          manuallyCorrected: true
-        }
-      }
-      const byGrade = { ...prev.byGrade }
-      if (byGrade[previousGrade] > 0) byGrade[previousGrade] -= 1
-      byGrade[correctedGrade] = (byGrade[correctedGrade] || 0) + 1
-
-      return {
-        ...prev,
-        correct: Math.max(0, (prev.correct || 0) - (wasCorrect ? 1 : 0)),
-        wrong: (prev.wrong || 0) + (wasCorrect ? 1 : 0),
-        streak: wasCorrect ? 0 : prev.streak,
-        history,
-        masteryByCard: {
-          ...(prev.masteryByCard || {}),
-          [current.id]: {
-            ...(prev.masteryByCard?.[current.id] || {}),
-            lastPercent: 0,
-            lastGrade: correctedGrade,
-            manuallyCorrected: true,
-            updatedAt: new Date().toISOString()
-          }
-        },
-        byGrade
-      }
-    })
   }
 
   function goToLastAnswered() {
@@ -3706,16 +3713,18 @@ export default function App() {
     if (!current) return
     const v = getCardView(current)
     setLibraryEditingId(null)
-    setEditFront(v.htmlFront || v.pergunta || '')
-    setEditBack(v.htmlBack || v.resposta || '')
+    updateEditFront(v.htmlFront || v.pergunta || '')
+    updateEditBack(v.htmlBack || v.resposta || '')
     setEditing(true)
   }
 
   function saveEdit() {
     const editingCardId = libraryEditingId || current?.id
     if (!editingCardId) return
-    const pergunta = stripHtml(editFront)
-    const resposta = stripHtml(editBack)
+    const frontHtmlToSave = editFrontRef.current || editFront
+    const backHtmlToSave = editBackRef.current || editBack
+    const pergunta = stripHtml(frontHtmlToSave)
+    const resposta = stripHtml(backHtmlToSave)
     const editedAt = new Date().toISOString()
     let updatedCard = null
     const nextCardsForVault = cards.map(c => {
@@ -3726,12 +3735,12 @@ export default function App() {
         ...baseCard,
         pergunta,
         resposta,
-        htmlFront: editFront,
-        htmlBack: editBack,
-        html_front: editFront,
-        html_back: editBack,
-        frontHtml: editFront,
-        backHtml: editBack,
+        htmlFront: frontHtmlToSave,
+        htmlBack: backHtmlToSave,
+        html_front: frontHtmlToSave,
+        html_back: backHtmlToSave,
+        frontHtml: frontHtmlToSave,
+        backHtml: backHtmlToSave,
         manualEditedAt: editedAt,
         sourceUpdatedAt: editedAt,
         palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
@@ -3756,7 +3765,7 @@ export default function App() {
     if (feedback?.cardId === editingCardId) {
       setFeedback(prev => prev ? {
         ...prev,
-        expected: resposta || stripHtml(editBack)
+        expected: resposta || stripHtml(backHtmlToSave)
       } : prev)
     }
     setEditing(false)
@@ -3782,8 +3791,8 @@ export default function App() {
     if (!card) return
     const v = getCardView(card)
     setLibraryEditingId(cardId)
-    setEditFront(v.htmlFront || v.pergunta || '')
-    setEditBack(v.htmlBack || v.resposta || '')
+    updateEditFront(v.htmlFront || v.pergunta || '')
+    updateEditBack(v.htmlBack || v.resposta || '')
     setEditing(true)
   }
 
@@ -3929,6 +3938,16 @@ export default function App() {
     setLibraryEditingId(null)
   }
 
+  function updateEditFront(value) {
+    editFrontRef.current = value
+    setEditFront(value)
+  }
+
+  function updateEditBack(value) {
+    editBackRef.current = value
+    setEditBack(value)
+  }
+
   function tsvCell(value) {
     return String(value || '')
       .replace(/\t/g, ' ')
@@ -3963,6 +3982,17 @@ export default function App() {
     setImportLog(`${activeCards.length} cards exportados.`)
   }
 
+  function applyImportedDeck(imported, buildMessage) {
+    const baseCards = latestCardsRef.current || cards
+    const result = mergeImportedCards(baseCards, imported)
+    setCards(result.merged)
+    persistLocalStateNow(result.merged, stats)
+    syncCardsInChunks(result.createdCards, 'Cards novos importados')
+    setIndex(0)
+    setImportLog(buildMessage(result))
+    return result
+  }
+
   function importCSV(e) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -3970,13 +4000,7 @@ export default function App() {
     reader.onload = () => {
       const imported = parseCSV(String(reader.result || ''))
       if (imported.length) {
-        setCards(prev => {
-          const result = mergeImportedCards(prev, imported)
-          setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
-          syncCardsInChunks(result.createdCards, 'Cards novos importados')
-          return result.merged
-        })
-        setIndex(0)
+        applyImportedDeck(imported, result => `Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
       } else {
         setImportLog('Nao consegui ler o CSV. Use: pergunta;resposta;imagem(opcional)')
       }
@@ -4040,13 +4064,7 @@ export default function App() {
         }
       })
 
-      setCards(prev => {
-        const result = mergeImportedCards(prev, imported)
-        setImportLog(`Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
-        syncCardsInChunks(result.createdCards, 'Cards novos importados')
-        return result.merged
-      })
-      setIndex(0)
+      applyImportedDeck(imported, result => `Importacao concluida: ${result.added} cards novos adicionados, ${result.ignoredExisting} cards antigos ignorados, ${result.preservedEdited} edicoes do site preservadas. Midias encontradas: ${Object.keys(mediaMap).length}. Total no deck: ${result.merged.filter(card => !card.deleted).length}.`)
     } catch (err) {
       console.error(err)
       setImportLog(`Erro ao importar APKG: ${err.message || String(err)}`)
@@ -4181,9 +4199,9 @@ export default function App() {
                     <div className="edit-box">
                       <h3>Editar card</h3>
                       <label>Frente/pergunta</label>
-                      <RichTextEditor value={editFront} onChange={setEditFront} />
+                      <RichTextEditor value={editFront} onChange={updateEditFront} />
                       <label>Resposta/gabarito</label>
-                      <RichTextEditor value={editBack} onChange={setEditBack} />
+                      <RichTextEditor value={editBack} onChange={updateEditBack} />
                       <div className="actions">
                         <button onClick={saveEdit}>Salvar edição</button>
                         <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null) }}>Cancelar</button>
@@ -4318,9 +4336,9 @@ export default function App() {
                     <div className="edit-box">
                       <h3>Editar flashcard</h3>
                       <label>Frente/pergunta</label>
-                      <RichTextEditor value={editFront} onChange={setEditFront} />
+                      <RichTextEditor value={editFront} onChange={updateEditFront} />
                       <label>Resposta/gabarito</label>
-                      <RichTextEditor value={editBack} onChange={setEditBack} />
+                      <RichTextEditor value={editBack} onChange={updateEditBack} />
                       <div className="actions">
                         <button onClick={saveEdit}>Salvar edição</button>
                         <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null) }}>Cancelar</button>
