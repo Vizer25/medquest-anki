@@ -2301,6 +2301,9 @@ export default function App() {
   const answerRef = useRef(null)
   const lastStudyScoreRef = useRef(null)
   const drainingSyncOutbox = useRef(false)
+  const localMutationAtRef = useRef(0)
+  const latestCardsRef = useRef(cards)
+  const latestStatsRef = useRef(stats)
 
   async function loginThroughProxy(email, password) {
     const response = await fetch('/api/auth-login', {
@@ -2422,6 +2425,28 @@ export default function App() {
       })
   }
 
+  function persistLocalStateNow(nextCards, nextStats = stats, overrides = {}) {
+    localMutationAtRef.current = Date.now()
+    latestCardsRef.current = nextCards
+    latestStatsRef.current = nextStats
+    const snapshot = {
+      cards: nextCards,
+      stats: nextStats,
+      config: overrides.config || config,
+      lastAnsweredId: overrides.lastAnsweredId ?? lastAnsweredId,
+      currentCardId: overrides.currentCardId ?? currentCardId
+    }
+    try {
+      localStorage.setItem('mq_cards', JSON.stringify(nextCards))
+      localStorage.setItem('mq_stats', JSON.stringify(nextStats))
+    } catch (err) {
+      console.warn('Nao foi possivel gravar estado imediato no localStorage.', err)
+    }
+    saveLocalStateSnapshot(snapshot).catch(err => {
+      console.warn('Snapshot local imediato adiado.', err)
+    })
+  }
+
   async function drainLocalSyncOutbox(authUser = user, token = sessionToken) {
     if (!authUser || !token || drainingSyncOutbox.current) return
 
@@ -2484,6 +2509,7 @@ export default function App() {
     if (!authedUser) return
 
     setSyncStatus('Carregando progresso salvo...')
+    const loadStartedAt = Date.now()
 
     let data = null
     if (token) {
@@ -2518,8 +2544,19 @@ export default function App() {
       setSyncStatus(`${token === FIREBASE_CLOUD_TOKEN ? 'Firebase' : 'Nuvem'} sincronizado. Deck local preservado.`)
     }
 
-    if (hasCloudCards || hasLocalCards) setCards(cardsToUse)
-    if (hasCloudStats) setStats(mergeStatsSources(data.stats, seedStats))
+    const localChangedDuringLoad = localMutationAtRef.current > loadStartedAt
+    if (!localChangedDuringLoad) {
+      if (hasCloudCards || hasLocalCards) setCards(cardsToUse)
+      if (hasCloudStats) setStats(mergeStatsSources(data.stats, seedStats))
+    } else {
+      setSyncStatus('Nuvem carregou atrasada; mantive suas alteracoes locais recentes.')
+      const latestCards = latestCardsRef.current || seedCards
+      const latestStats = latestStatsRef.current || seedStats
+      const diffCards = hasCloudCards ? cloudDiffCards(data.cards, latestCards) : latestCards
+      if (diffCards.length) syncCardsInChunks(diffCards, `${diffCards.length} alteracoes locais recentes`, authedUser, token)
+      if (hasCloudStats) saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data.stats, latestStats)).catch(err => console.warn('Stats recentes adiados.', err))
+      return
+    }
 
     if (data?.migrationNeeded && hasCloudCards) {
       if (!localDeckIsLarger) {
@@ -2728,7 +2765,7 @@ export default function App() {
   }, [activeCards, focusedCards, studyTag, dueRefreshKey, seenCardIds, reviewStreakForNewRatio])
   const answeredCardId = pendingGrade?.cardId || feedback?.cardId || ''
   const queuedCurrent = dueCards.length ? dueCards[index % dueCards.length] : null
-  const answeredCurrent = answeredCardId ? activeCards.find(card => card.id === answeredCardId) : null
+  const answeredCurrent = pendingGrade?.scheduledCard || (answeredCardId ? activeCards.find(card => card.id === answeredCardId) : null)
   const lockedCurrent = currentCardId ? activeCards.find(card => card.id === currentCardId && !card.deleted && !card.suspended) : null
   const current = answeredCurrent || lockedCurrent || queuedCurrent
   const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
@@ -2864,6 +2901,14 @@ export default function App() {
       {false && <div className="bar"><div style={{width: `${progress}%`}} /></div>}
     </>
   )
+
+  useEffect(() => {
+    latestCardsRef.current = cards
+  }, [cards])
+
+  useEffect(() => {
+    latestStatsRef.current = stats
+  }, [stats])
 
   useEffect(() => {
     if (lastStudyScoreRef.current == null) {
@@ -3099,28 +3144,6 @@ export default function App() {
         console.error(err)
         setSyncStatus('Nao consegui sincronizar agora. Usando progresso local.')
       })
-
-      ;(async () => {
-        try {
-          const oldData = await withTimeout(loginThroughProxy(email, senha), 8000, 'Tempo limite ao migrar Supabase')
-          const oldToken = oldData.session?.access_token || oldData.access_token || ''
-          const oldUser = oldData.user
-          if (!oldUser || !oldToken) return
-
-          const oldProfile = await withTimeout(getProfileThroughProxy(oldUser, oldToken), 10000, 'Tempo limite ao ler backup antigo')
-          const migratedCards = Array.isArray(oldProfile?.cards) && oldProfile.cards.length
-            ? mergeCardSources(oldProfile.cards, cards)
-            : cards
-          const migratedStats = oldProfile?.stats ? mergeStatsSources(oldProfile.stats, stats) : stats
-          await saveFirebaseProfile(firebaseUser, migratedCards, migratedStats)
-          setCards(migratedCards)
-          setStats(migratedStats)
-          setSyncStatus('Firebase conectado. Backup antigo migrado para a nova nuvem.')
-        } catch (migrationErr) {
-          console.warn('Migracao Supabase -> Firebase adiada.', migrationErr)
-          setSyncStatus('Firebase conectado. Backup antigo do Supabase sera tentado depois.')
-        }
-      })()
     } catch (err) {
       console.error(err)
       setFeedback({ type: 'bad', text: authErrorMessage(err) })
@@ -3228,51 +3251,50 @@ export default function App() {
     const isCorrect = percent >= 80
     const xpDelta = isCorrect ? Math.max(5, Math.round(25 * percent / 100)) : -5
     const scheduledCard = scheduleCard(current, grade)
+    const answeredAt = new Date().toISOString()
+    const nextCardsAfterAnswer = cards.map(card => card.id === current.id ? scheduledCard : card)
+    const prevStats = safeStats(stats)
+    const dailyPatch = markDailyDone(prevStats, current.id, isNewCard)
+    const newXp = Math.max(0, (prevStats.xp || 0) + xpDelta)
+    const newStreak = isCorrect ? (prevStats.streak || 0) + 1 : 0
+    const historyItem = {
+      id: current.id,
+      pergunta: cardForAnswer.pergunta,
+      percent,
+      grade,
+      correct: isCorrect,
+      isNewCard,
+      seconds: cardSeconds,
+      day: todayKey(),
+      date: answeredAt
+    }
+    const nextStatsAfterAnswer = {
+      ...prevStats,
+      ...dailyPatch,
+      xp: newXp,
+      level: Math.floor(newXp / 100) + 1,
+      correct: (prevStats.correct || 0) + (isCorrect ? 1 : 0),
+      wrong: (prevStats.wrong || 0) + (isCorrect ? 0 : 1),
+      streak: newStreak,
+      record: Math.max(prevStats.record || 0, newStreak),
+      history: [...(prevStats.history || []), historyItem].slice(-500),
+      masteryByCard: {
+        ...(prevStats.masteryByCard || {}),
+        [current.id]: {
+          bestPercent: Math.max(Number(prevStats.masteryByCard?.[current.id]?.bestPercent || 0), percent),
+          lastPercent: percent,
+          lastGrade: grade,
+          updatedAt: answeredAt
+        }
+      },
+      totalAnswerSeconds: (prevStats.totalAnswerSeconds || 0) + cardSeconds,
+      fastestSeconds: prevStats.fastestSeconds == null ? cardSeconds : Math.min(prevStats.fastestSeconds, cardSeconds),
+      slowestSeconds: Math.max(prevStats.slowestSeconds || 0, cardSeconds),
+      byGrade: { ...prevStats.byGrade, [grade]: ((prevStats.byGrade || {})[grade] || 0) + 1 }
+    }
 
-    setCards(prev => prev.map(card => card.id === current.id ? scheduledCard : card))
-
-    setStats(prevRaw => {
-      const prev = safeStats(prevRaw)
-      const dailyPatch = markDailyDone(prev, current.id, isNewCard)
-      const newXp = Math.max(0, (prev.xp || 0) + xpDelta)
-      const newStreak = isCorrect ? (prev.streak || 0) + 1 : 0
-      const historyItem = {
-        id: current.id,
-        pergunta: cardForAnswer.pergunta,
-        percent,
-        grade,
-        correct: isCorrect,
-        isNewCard,
-        seconds: cardSeconds,
-        day: todayKey(),
-        date: new Date().toISOString()
-      }
-
-      return {
-        ...prev,
-        ...dailyPatch,
-        xp: newXp,
-        level: Math.floor(newXp / 100) + 1,
-        correct: (prev.correct || 0) + (isCorrect ? 1 : 0),
-        wrong: (prev.wrong || 0) + (isCorrect ? 0 : 1),
-        streak: newStreak,
-        record: Math.max(prev.record || 0, newStreak),
-        history: [...(prev.history || []), historyItem].slice(-500),
-        masteryByCard: {
-          ...(prev.masteryByCard || {}),
-          [current.id]: {
-            bestPercent: Math.max(Number(prev.masteryByCard?.[current.id]?.bestPercent || 0), percent),
-            lastPercent: percent,
-            lastGrade: grade,
-            updatedAt: new Date().toISOString()
-          }
-        },
-        totalAnswerSeconds: (prev.totalAnswerSeconds || 0) + cardSeconds,
-        fastestSeconds: prev.fastestSeconds == null ? cardSeconds : Math.min(prev.fastestSeconds, cardSeconds),
-        slowestSeconds: Math.max(prev.slowestSeconds || 0, cardSeconds),
-        byGrade: { ...prev.byGrade, [grade]: ((prev.byGrade || {})[grade] || 0) + 1 }
-      }
-    })
+    setCards(nextCardsAfterAnswer)
+    setStats(nextStatsAfterAnswer)
 
     setLastAnsweredId(current.id)
     localStorage.setItem('mq_last_answered', current.id)
@@ -3282,9 +3304,19 @@ export default function App() {
       percent,
       correct: isCorrect,
       seconds: cardSeconds,
-      answeredAt: new Date().toISOString(),
+      answeredAt,
       isNewCard,
       scheduledCard
+    })
+    persistLocalStateNow(nextCardsAfterAnswer, nextStatsAfterAnswer, { lastAnsweredId: current.id })
+    syncOneCard(scheduledCard, {
+      cardId: current.id,
+      grade,
+      percent,
+      correct: isCorrect,
+      seconds: cardSeconds,
+      answeredAt,
+      isNewCard
     })
     const nextSchedule = previewSchedule(current, grade, config.fsrsRetention)
     const scheduleLabel = nextSchedule.label
@@ -3497,10 +3529,13 @@ export default function App() {
     const previousGrade = feedback.grade || pendingGrade?.grade || 'again'
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'good'
+    const cardToCorrect = pendingGrade?.scheduledCard || current
 
-    const nextSchedule = previewSchedule(current, correctedGrade, config.fsrsRetention)
-    const correctedCard = scheduleCard(current, correctedGrade)
-    setCards(prev => prev.map(card => card.id === current.id ? correctedCard : card))
+    const nextSchedule = previewSchedule(cardToCorrect, correctedGrade, config.fsrsRetention)
+    const correctedCard = scheduleCard(cardToCorrect, correctedGrade)
+    const nextCardsAfterCorrection = cards.map(card => card.id === current.id ? correctedCard : card)
+    setCards(nextCardsAfterCorrection)
+    persistLocalStateNow(nextCardsAfterCorrection, stats)
     syncOneCard(correctedCard, {
       cardId: current.id,
       grade: correctedGrade,
@@ -3574,9 +3609,12 @@ export default function App() {
     const previousGrade = feedback.grade || pendingGrade?.grade || 'good'
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'again'
-    const nextSchedule = previewSchedule(current, correctedGrade, config.fsrsRetention)
-    const correctedCard = scheduleCard(current, correctedGrade)
-    setCards(prev => prev.map(card => card.id === current.id ? correctedCard : card))
+    const cardToCorrect = pendingGrade?.scheduledCard || current
+    const nextSchedule = previewSchedule(cardToCorrect, correctedGrade, config.fsrsRetention)
+    const correctedCard = scheduleCard(cardToCorrect, correctedGrade)
+    const nextCardsAfterCorrection = cards.map(card => card.id === current.id ? correctedCard : card)
+    setCards(nextCardsAfterCorrection)
+    persistLocalStateNow(nextCardsAfterCorrection, stats)
     syncOneCard(correctedCard, {
       cardId: current.id,
       grade: correctedGrade,
@@ -3697,13 +3735,7 @@ export default function App() {
     if (!updatedCard) return
 
     setCards(nextCardsForVault)
-    try {
-      localStorage.setItem('mq_cards', JSON.stringify(nextCardsForVault))
-    } catch (err) {
-      console.warn('Nao foi possivel salvar edicao no localStorage.', err)
-    }
-    saveLocalStateSnapshot({ cards: nextCardsForVault, stats, config, lastAnsweredId, currentCardId })
-      .catch(err => console.warn('Snapshot de edicao adiado.', err))
+    persistLocalStateNow(nextCardsForVault, stats)
     syncOneCard(updatedCard)
     setSyncStatus('Edicao do card salva localmente e enviada para a nuvem.')
     if (feedback?.cardId === editingCardId) {
