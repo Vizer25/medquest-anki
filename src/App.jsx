@@ -2242,6 +2242,10 @@ function RichTextEditor({ value, onChange }) {
         onKeyUp={saveSelection}
         onMouseUp={saveSelection}
         onFocus={saveSelection}
+        onBlur={() => {
+          emitChange()
+          saveSelection()
+        }}
       />
     </div>
   )
@@ -3716,8 +3720,10 @@ export default function App() {
     let updatedCard = null
     const nextCardsForVault = cards.map(c => {
       if (c.id !== editingCardId) return c
+      const latestScheduledCard = pendingGrade?.cardId === editingCardId ? pendingGrade.scheduledCard : null
+      const baseCard = latestScheduledCard?.id === editingCardId ? latestScheduledCard : c
       updatedCard = {
-        ...c,
+        ...baseCard,
         pergunta,
         resposta,
         htmlFront: editFront,
