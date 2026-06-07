@@ -1030,6 +1030,10 @@ function isUnseenStudyCard(card, seenIds) {
   return !hasReviewHistory(card) && !seenIds.has(card.id)
 }
 
+function isReviewStudyCard(card, seenIds, now = Date.now()) {
+  return !isUnseenStudyCard(card, seenIds) && isCardDue(card, now)
+}
+
 function fsrsReviewPriority(card) {
   const state = fsrsStateFromCard(card)
   if (state === State.Review) return 0
@@ -1101,7 +1105,7 @@ function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now(), rec
     shouldPullUnseen ? unseenCandidates : unseenCandidates.filter(card => isCardDue(card, now))
   )
   const reviews = sortReviewQueue(
-    cards.filter(card => !isUnseenStudyCard(card, seenIds) && isCardDue(card, now)),
+    cards.filter(card => isReviewStudyCard(card, seenIds, now)),
     now
   )
 
@@ -2068,7 +2072,7 @@ function HtmlContent({ html, className }) {
   return <div ref={contentRef} className={className} dangerouslySetInnerHTML={{ __html: safeHtml }} />
 }
 
-function RichTextEditor({ value, onChange }) {
+function RichTextEditor({ value, onChange, lineHeight = '1.5', paragraphGap = '14px' }) {
   const editorRef = useRef(null)
   const lastHtmlRef = useRef(null)
   const savedSelectionRef = useRef(null)
@@ -2189,7 +2193,7 @@ function RichTextEditor({ value, onChange }) {
   }
 
   return (
-    <div className="rich-editor">
+    <div className="rich-editor" style={{ '--editor-line-height': lineHeight, '--editor-paragraph-gap': paragraphGap }}>
       <div className="rich-toolbar">
         <div className="toolbar-group">
           <button type="button" className="tool-button" title="Negrito" onMouseDown={e => { e.preventDefault(); runCommand('bold') }}>B</button>
@@ -2722,6 +2726,7 @@ export default function App() {
 
     setCards(resetCards)
     setStats(resetStats)
+    persistLocalStateNow(resetCards, resetStats, { currentCardId: '' })
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
@@ -3052,13 +3057,19 @@ export default function App() {
         return
       }
 
+      const lockedIsQueued = dueCards.some(card => card.id === currentCardId)
+      if (!lockedIsQueued && queuedCurrent?.id && queuedCurrent.id !== currentCardId) {
+        setCurrentCardId(queuedCurrent.id)
+        return
+      }
+
       if (!isCardDue(locked) && queuedCurrent?.id && queuedCurrent.id !== currentCardId) {
         setCurrentCardId(queuedCurrent.id)
       }
       return
     }
     if (queuedCurrent) setCurrentCardId(queuedCurrent.id)
-  }, [currentCardId, queuedCurrent?.id, activeCards, answer, editing, feedback, pendingGrade])
+  }, [currentCardId, queuedCurrent?.id, activeCards, dueCards, answer, editing, feedback, pendingGrade])
 
   useEffect(() => {
     if (!ready || !logged) return
@@ -3444,8 +3455,11 @@ export default function App() {
 
   function resetAll() {
     const now = Date.now()
-    setStats({ ...DEFAULT_STATS, learningResetAt: new Date(now).toISOString() })
-    setCards(cards.map(c => resetCardLearning(c, now)))
+    const nextStats = { ...DEFAULT_STATS, learningResetAt: new Date(now).toISOString() }
+    const nextCards = (latestCardsRef.current || cards).map(c => resetCardLearning(c, now))
+    setStats(nextStats)
+    setCards(nextCards)
+    persistLocalStateNow(nextCards, nextStats, { currentCardId: '' })
     setSiteSeconds(0)
     setCardSeconds(0)
     setIndex(0)
@@ -3483,7 +3497,9 @@ export default function App() {
       palavras: normalize(built.resposta || newBack).split(' ').filter(w => w.length > 3).slice(0, 12)
     }
 
-    setCards(prev => [...prev, card])
+    const nextCards = [...(latestCardsRef.current || cards), card]
+    setCards(nextCards)
+    persistLocalStateNow(nextCards, stats, { currentCardId: card.id })
     syncOneCard(card)
     setNewFront('')
     setNewBack('')
@@ -3696,10 +3712,17 @@ export default function App() {
 
   function goToLastAnswered() {
     if (!lastAnsweredId) return
-    const updated = cards.map(c => c.id === lastAnsweredId ? { ...c, dueAt: Date.now() } : c)
+    let updatedCard = null
+    const updated = (latestCardsRef.current || cards).map(c => {
+      if (c.id !== lastAnsweredId) return c
+      updatedCard = { ...c, dueAt: Date.now() }
+      return updatedCard
+    })
     const freshDue = updated.filter(c => !c.dueAt || c.dueAt <= Date.now())
     const pos = freshDue.findIndex(c => c.id === lastAnsweredId)
     setCards(updated)
+    persistLocalStateNow(updated, stats, { currentCardId: lastAnsweredId })
+    if (updatedCard) syncOneCard(updatedCard)
     setIndex(pos >= 0 ? pos : 0)
     setCurrentCardId(lastAnsweredId)
     setAnswer('')
@@ -3773,7 +3796,15 @@ export default function App() {
   }
 
   function studySingleCard(cardId) {
-    setCards(prev => prev.map(card => card.id === cardId ? { ...card, dueAt: Date.now() } : card))
+    let updatedCard = null
+    const nextCards = (latestCardsRef.current || cards).map(card => {
+      if (card.id !== cardId) return card
+      updatedCard = { ...card, dueAt: Date.now() }
+      return updatedCard
+    })
+    setCards(nextCards)
+    persistLocalStateNow(nextCards, stats, { currentCardId: cardId })
+    if (updatedCard) syncOneCard(updatedCard)
     setFocusedCardIds([cardId])
     setStudyTag('')
     setIndex(0)
@@ -3799,7 +3830,7 @@ export default function App() {
   function toggleSuspendCard(cardId) {
     let suspended = false
     let updatedCard = null
-    setCards(prev => prev.map(card => {
+    const nextCards = (latestCardsRef.current || cards).map(card => {
       if (card.id !== cardId) return card
       suspended = !card.suspended
       updatedCard = {
@@ -3810,7 +3841,9 @@ export default function App() {
         manualEditedAt: new Date().toISOString()
       }
       return updatedCard
-    }))
+    })
+    setCards(nextCards)
+    persistLocalStateNow(nextCards, stats)
     if (updatedCard) syncOneCard(updatedCard)
     setImportLog(suspended ? 'Card suspenso. Ele nao aparecera nas revisoes normais.' : 'Card reativado. Ele voltou para as revisoes.')
   }
@@ -3821,7 +3854,8 @@ export default function App() {
     const ok = window.confirm('Excluir este flashcard da biblioteca? Ele nao aparecera nas revisoes e nao voltara em novas importacoes.')
     if (!ok) return
     let updatedCard = null
-    setCards(prev => prev.map(c => {
+    const nextLastAnsweredId = lastAnsweredId === cardId ? null : lastAnsweredId
+    const nextCards = (latestCardsRef.current || cards).map(c => {
       if (c.id !== cardId) return c
       updatedCard = {
         ...c,
@@ -3830,7 +3864,9 @@ export default function App() {
         manualEditedAt: new Date().toISOString()
       }
       return updatedCard
-    }))
+    })
+    setCards(nextCards)
+    persistLocalStateNow(nextCards, stats, { lastAnsweredId: nextLastAnsweredId, currentCardId: currentCardId === cardId ? '' : currentCardId })
     if (updatedCard) syncOneCard(updatedCard)
     if (lastAnsweredId === cardId) setLastAnsweredId(null)
     setFocusedCardIds(prev => prev.filter(id => id !== cardId))
@@ -3907,8 +3943,8 @@ export default function App() {
     })
 
     let updatedOriginal = null
-    setCards(prev => [
-      ...prev.map(card => {
+    const nextCards = [
+      ...(latestCardsRef.current || cards).map(card => {
         if (card.id !== sourceCard.id || !splitSuspendOriginal) return card
         updatedOriginal = {
           ...card,
@@ -3919,7 +3955,9 @@ export default function App() {
         return updatedOriginal
       }),
       ...created
-    ])
+    ]
+    setCards(nextCards)
+    persistLocalStateNow(nextCards, stats)
     syncCardsInChunks(updatedOriginal ? [updatedOriginal, ...created] : created, 'Cards quebrados')
     setSplitCardId(null)
     setSplitParts([])
