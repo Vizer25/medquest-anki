@@ -2893,16 +2893,17 @@ export default function App() {
   const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
   const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
   const currentView = current ? getCardView(current) : null
-  const currentFeedbackAnswerHtml = feedback?.cardId === current?.id
-    ? firstVisibleHtml(
-      feedback.expectedHtml,
-      cardBackHtml(currentView),
-      cardBackHtml(current),
-      editBackRef.current,
-      editBack,
-      feedback.expected
-    )
-    : ''
+  const currentAnswerPanelHtml = firstVisibleHtml(
+    editing ? editBackRef.current : '',
+    editing ? editBack : '',
+    feedback?.cardId === current?.id ? feedback.expectedHtml : '',
+    feedback?.cardId === current?.id ? feedback.expected : '',
+    cardBackHtml(currentView),
+    cardBackHtml(current)
+  )
+  const shouldShowAnswerPanel = Boolean(
+    (feedback?.cardId === current?.id || editing) && hasVisibleHtmlContent(currentAnswerPanelHtml)
+  )
   const currentStageBadge = current ? reviewStageDetails(current) : null
   const currentTagText = normalize(String(current?.tags || ''))
   const currentExamBadges = [
@@ -4370,15 +4371,15 @@ export default function App() {
                   </div>
                 </div>
                 <aside className={`answer-panel ${feedback && feedback.cardId === current.id ? `result ${feedback.type}` : ''}`}>
-                  {feedback && feedback.cardId === current.id ? (
+                  {shouldShowAnswerPanel ? (
                     <>
-                      {feedback.percent >= 80 ? (
+                      {feedback?.cardId === current.id && feedback.percent >= 80 ? (
                         <button className="result-dot result-dot-wrong" onClick={markCurrentAsWrong} title="Marcar como erro (Ctrl + ç)" aria-label="Marcar como erro" type="button" />
-                      ) : (
+                      ) : feedback?.cardId === current.id ? (
                         <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + ~)" aria-label="Marcar como acerto" type="button" />
-                      )}
+                      ) : null}
                       <div className="answer-box">
-                        <HtmlContent html={currentFeedbackAnswerHtml} compactParagraphs />
+                        <HtmlContent html={currentAnswerPanelHtml} />
                       </div>
                     </>
                   ) : (
