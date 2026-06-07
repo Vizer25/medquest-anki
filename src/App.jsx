@@ -2107,6 +2107,17 @@ function normalizeRichHtmlSpacing(html, lineHeight = '1.5', paragraphGap = '6px'
   return container.innerHTML
 }
 
+function hasVisibleHtmlContent(html) {
+  const source = String(html || '').trim()
+  if (!source) return false
+  if (/<(img|video|audio|table|ul|ol|iframe|svg)\b/i.test(source)) return true
+  return stripHtml(source).length > 0
+}
+
+function firstVisibleHtml(...values) {
+  return values.find(value => hasVisibleHtmlContent(value)) || ''
+}
+
 function HtmlContent({ html, className, compactParagraphs = false }) {
   const contentRef = useRef(null)
   const safeHtml = useMemo(() => (
@@ -2866,6 +2877,9 @@ export default function App() {
   const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
   const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
   const currentView = current ? getCardView(current) : null
+  const currentFeedbackAnswerHtml = feedback?.cardId === current?.id
+    ? firstVisibleHtml(feedback.expectedHtml, currentView?.htmlBack, currentView?.resposta, feedback.expected)
+    : ''
   const currentStageBadge = current ? reviewStageDetails(current) : null
   const currentTagText = normalize(String(current?.tags || ''))
   const currentExamBadges = [
@@ -3421,6 +3435,9 @@ export default function App() {
     })
     const nextSchedule = previewSchedule(current, grade, config.fsrsRetention)
     const scheduleLabel = nextSchedule.label
+    const expectedHtml = cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length
+      ? cardForAnswer.clozeAnswers.join(' / ')
+      : firstVisibleHtml(cardForAnswer.htmlBack, cardForAnswer.resposta)
 
     setFeedback({
       cardId: current.id,
@@ -3429,7 +3446,8 @@ export default function App() {
       percent,
       text: timedOut ? `Tempo esgotado. Você acertou ${percent}% da resposta.` : `Você acertou ${percent}% da resposta em ${formatTime(cardSeconds)}.`,
       userAnswer: userText,
-      expected: cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length ? cardForAnswer.clozeAnswers.join(' / ') : (cardForAnswer.resposta || stripHtml(cardForAnswer.htmlBack)),
+      expected: stripHtml(expectedHtml),
+      expectedHtml,
       scheduleLabel
     })
   }
@@ -3849,7 +3867,8 @@ export default function App() {
     if (feedback?.cardId === editingCardId) {
       setFeedback(prev => prev ? {
         ...prev,
-        expected: resposta || stripHtml(backHtmlToSave)
+        expected: resposta || stripHtml(backHtmlToSave),
+        expectedHtml: backHtmlToSave
       } : prev)
     }
     setEditing(false)
@@ -4336,7 +4355,7 @@ export default function App() {
                         <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + ~)" aria-label="Marcar como acerto" type="button" />
                       )}
                       <div className="answer-box">
-                        <HtmlContent html={currentView.htmlBack || feedback.expected} compactParagraphs />
+                        <HtmlContent html={currentFeedbackAnswerHtml} compactParagraphs />
                       </div>
                     </>
                   ) : (
