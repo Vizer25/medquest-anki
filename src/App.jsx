@@ -3738,6 +3738,15 @@ export default function App() {
     persistLocalStateNow(nextCardsForVault, stats)
     syncOneCard(updatedCard)
     setSyncStatus('Edicao do card salva localmente e enviada para a nuvem.')
+    if (pendingGrade?.cardId === editingCardId) {
+      setPendingGrade(prev => prev ? {
+        ...prev,
+        scheduledCard: {
+          ...(prev.scheduledCard || {}),
+          ...updatedCard
+        }
+      } : prev)
+    }
     if (feedback?.cardId === editingCardId) {
       setFeedback(prev => prev ? {
         ...prev,
