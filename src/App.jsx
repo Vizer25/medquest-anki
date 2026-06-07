@@ -3674,10 +3674,9 @@ export default function App() {
     if (!editingCardId) return
     const pergunta = stripHtml(editFront)
     const resposta = stripHtml(editBack)
+    const editedAt = new Date().toISOString()
     let updatedCard = null
-    let nextCardsForVault = null
-    setCards(prev => {
-      nextCardsForVault = prev.map(c => {
+    const nextCardsForVault = cards.map(c => {
       if (c.id !== editingCardId) return c
       updatedCard = {
         ...c,
@@ -3685,18 +3684,28 @@ export default function App() {
         resposta,
         htmlFront: editFront,
         htmlBack: editBack,
-        manualEditedAt: new Date().toISOString(),
+        html_front: editFront,
+        html_back: editBack,
+        frontHtml: editFront,
+        backHtml: editBack,
+        manualEditedAt: editedAt,
+        sourceUpdatedAt: editedAt,
         palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
       }
       return updatedCard
-      })
-      return nextCardsForVault
     })
-    if (nextCardsForVault) {
-      saveLocalStateSnapshot({ cards: nextCardsForVault, stats, config, lastAnsweredId, currentCardId })
-        .catch(err => console.warn('Snapshot de edicao adiado.', err))
+    if (!updatedCard) return
+
+    setCards(nextCardsForVault)
+    try {
+      localStorage.setItem('mq_cards', JSON.stringify(nextCardsForVault))
+    } catch (err) {
+      console.warn('Nao foi possivel salvar edicao no localStorage.', err)
     }
-    if (updatedCard) syncOneCard(updatedCard)
+    saveLocalStateSnapshot({ cards: nextCardsForVault, stats, config, lastAnsweredId, currentCardId })
+      .catch(err => console.warn('Snapshot de edicao adiado.', err))
+    syncOneCard(updatedCard)
+    setSyncStatus('Edicao do card salva localmente e enviada para a nuvem.')
     if (feedback?.cardId === editingCardId) {
       setFeedback(prev => prev ? {
         ...prev,
