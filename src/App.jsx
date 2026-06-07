@@ -2061,18 +2061,69 @@ function hideBrokenImages(container) {
   })
 }
 
-function HtmlContent({ html, className }) {
+function compactRepeatedBreaks(container) {
+  if (!container) return
+  let previousBreak = false
+  Array.from(container.childNodes).forEach(node => {
+    const isWhitespace = node.nodeType === Node.TEXT_NODE && !node.textContent.trim()
+    const isBreak = node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR'
+    if (isWhitespace) return
+    if (isBreak) {
+      if (previousBreak) node.remove()
+      previousBreak = true
+      return
+    }
+    previousBreak = false
+  })
+}
+
+function normalizeEditorSpacing(container, lineHeight = '1.5', paragraphGap = '6px') {
+  if (!container) return
+  const nodesToCompact = [container, ...container.querySelectorAll('p,div,li,span')]
+  nodesToCompact.forEach(compactRepeatedBreaks)
+  const topBlocks = Array.from(container.children).filter(node => ['P', 'DIV'].includes(node.tagName))
+  topBlocks.forEach(block => {
+    const hasMedia = Boolean(block.querySelector('img,video,audio,table,ul,ol,iframe,svg'))
+    const text = String(block.textContent || '').replace(/\u00a0/g, '').trim()
+    if (!text && !hasMedia) {
+      block.remove()
+      return
+    }
+    block.style.margin = `0 0 ${paragraphGap}`
+    block.style.lineHeight = lineHeight
+    block.style.whiteSpace = 'pre-wrap'
+  })
+  const remainingBlocks = Array.from(container.children).filter(node => ['P', 'DIV'].includes(node.tagName))
+  const lastBlock = remainingBlocks[remainingBlocks.length - 1]
+  if (lastBlock) lastBlock.style.marginBottom = '0'
+}
+
+function normalizeRichHtmlSpacing(html, lineHeight = '1.5', paragraphGap = '6px') {
+  const safeHtml = removeImageFallbackText(html)
+  if (typeof document === 'undefined') return safeHtml
+  const container = document.createElement('div')
+  container.innerHTML = safeHtml
+  normalizeEditorSpacing(container, lineHeight, paragraphGap)
+  return container.innerHTML
+}
+
+function HtmlContent({ html, className, compactParagraphs = false }) {
   const contentRef = useRef(null)
-  const safeHtml = useMemo(() => removeImageFallbackText(html), [html])
+  const safeHtml = useMemo(() => (
+    compactParagraphs
+      ? normalizeRichHtmlSpacing(html, '1.45', '6px')
+      : removeImageFallbackText(html)
+  ), [html, compactParagraphs])
 
   useEffect(() => {
+    if (compactParagraphs) normalizeEditorSpacing(contentRef.current, '1.45', '6px')
     hideBrokenImages(contentRef.current)
-  }, [safeHtml])
+  }, [safeHtml, compactParagraphs])
 
   return <div ref={contentRef} className={className} dangerouslySetInnerHTML={{ __html: safeHtml }} />
 }
 
-function RichTextEditor({ value, onChange, lineHeight = '1.5', paragraphGap = '14px' }) {
+function RichTextEditor({ value, onChange, lineHeight = '1.5', paragraphGap = '6px' }) {
   const editorRef = useRef(null)
   const lastHtmlRef = useRef(null)
   const savedSelectionRef = useRef(null)
@@ -2087,21 +2138,24 @@ function RichTextEditor({ value, onChange, lineHeight = '1.5', paragraphGap = '1
   ]
   const paragraphSpaces = [
     { label: '0 px', value: '0px' },
+    { label: '4 px', value: '4px' },
     { label: '6 px', value: '6px' },
+    { label: '8 px', value: '8px' },
     { label: '10 px', value: '10px' },
-    { label: '12 px', value: '12px' },
-    { label: '18 px', value: '18px' }
+    { label: '12 px', value: '12px' }
   ]
 
   useEffect(() => {
     if (!editorRef.current || value === lastHtmlRef.current) return
-    const nextHtml = removeImageFallbackText(value)
+    const nextHtml = normalizeRichHtmlSpacing(value, lineHeight, paragraphGap)
     editorRef.current.innerHTML = nextHtml
+    normalizeEditorSpacing(editorRef.current, lineHeight, paragraphGap)
     hideBrokenImages(editorRef.current)
     lastHtmlRef.current = nextHtml
-  }, [value])
+  }, [value, lineHeight, paragraphGap])
 
   function emitChange() {
+    normalizeEditorSpacing(editorRef.current, lineHeight, paragraphGap)
     const html = editorRef.current?.innerHTML || ''
     lastHtmlRef.current = html
     onChange(html)
@@ -2177,6 +2231,13 @@ function RichTextEditor({ value, onChange, lineHeight = '1.5', paragraphGap = '1
   }
 
   function handleEditorKeyDown(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      document.execCommand('insertLineBreak')
+      emitChange()
+      saveSelection()
+      return
+    }
     if (!(event.ctrlKey || event.metaKey)) return
     if (event.key === '.' || event.key === '>') {
       event.preventDefault()
@@ -3744,8 +3805,8 @@ export default function App() {
   function saveEdit() {
     const editingCardId = libraryEditingId || current?.id
     if (!editingCardId) return
-    const frontHtmlToSave = editFrontRef.current || editFront
-    const backHtmlToSave = editBackRef.current || editBack
+    const frontHtmlToSave = normalizeRichHtmlSpacing(editFrontRef.current || editFront, '1.5', '6px')
+    const backHtmlToSave = normalizeRichHtmlSpacing(editBackRef.current || editBack, '1.5', '6px')
     const pergunta = stripHtml(frontHtmlToSave)
     const resposta = stripHtml(backHtmlToSave)
     const editedAt = new Date().toISOString()
@@ -4275,7 +4336,7 @@ export default function App() {
                         <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + ~)" aria-label="Marcar como acerto" type="button" />
                       )}
                       <div className="answer-box">
-                        <HtmlContent html={currentView.htmlBack || feedback.expected} />
+                        <HtmlContent html={currentView.htmlBack || feedback.expected} compactParagraphs />
                       </div>
                     </>
                   ) : (
