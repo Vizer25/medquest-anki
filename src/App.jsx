@@ -202,6 +202,8 @@ const DEFAULT_STATS = {
   streak: 0,
   record: 0,
   daily: {},
+  dailyAnswers: {},
+  dailyNewAnswers: {},
   studyStreak: 0,
   lastStudyDate: '',
   history: [],
@@ -964,10 +966,14 @@ function dailyUniqueCount(stats, dayKey) {
 }
 
 function dailyAnswerCount(stats, dayKey) {
+  const explicit = Number(stats.dailyAnswers?.[dayKey])
+  if (Object.prototype.hasOwnProperty.call(stats.dailyAnswers || {}, dayKey) && Number.isFinite(explicit)) return explicit
   return (stats.history || []).filter(item => isAnsweredHistoryItem(item) && historyItemDayKey(item) === dayKey).length
 }
 
 function dailyNewCardCount(stats, dayKey) {
+  const explicit = Number(stats.dailyNewAnswers?.[dayKey])
+  if (Object.prototype.hasOwnProperty.call(stats.dailyNewAnswers || {}, dayKey) && Number.isFinite(explicit)) return explicit
   const answered = (stats.history || []).filter(isAnsweredHistoryItem)
   const firstIndexByCard = new Map()
   answered.forEach((item, index) => {
@@ -1182,6 +1188,8 @@ function safeStats(raw) {
     ...DEFAULT_STATS,
     ...s,
     daily: s.daily && typeof s.daily === 'object' ? s.daily : {},
+    dailyAnswers: s.dailyAnswers && typeof s.dailyAnswers === 'object' ? s.dailyAnswers : {},
+    dailyNewAnswers: s.dailyNewAnswers && typeof s.dailyNewAnswers === 'object' ? s.dailyNewAnswers : {},
     history: Array.isArray(s.history) ? s.history : [],
     masteryByCard: s.masteryByCard && typeof s.masteryByCard === 'object' ? s.masteryByCard : {},
     dailySeen: s.dailySeen && typeof s.dailySeen === 'object' ? s.dailySeen : {},
@@ -3121,7 +3129,7 @@ export default function App() {
     setCardSeconds(0)
   }
 
-  function markDailyDone(oldStats, cardId) {
+  function markDailyDone(oldStats, cardId, isNewCard = false) {
     const t = todayKey()
     const existingSeen = Array.isArray(oldStats.dailySeen?.[t]) ? oldStats.dailySeen[t] : []
     const historySeen = uniqueHistoryIdsForDay(oldStats, t)
@@ -3129,15 +3137,17 @@ export default function App() {
     const yesterday = dateKey(new Date(Date.now() - DAY))
     const dailySeen = { ...(oldStats.dailySeen || {}), [t]: nextSeen }
     const daily = { ...(oldStats.daily || {}), [t]: nextSeen.length }
+    const dailyAnswers = { ...(oldStats.dailyAnswers || {}), [t]: Number(oldStats.dailyAnswers?.[t] || 0) + 1 }
+    const dailyNewAnswers = { ...(oldStats.dailyNewAnswers || {}), [t]: Number(oldStats.dailyNewAnswers?.[t] || 0) + (isNewCard ? 1 : 0) }
     let studyStreak = oldStats.studyStreak || 0
     let lastStudyDate = oldStats.lastStudyDate || ''
 
-    if (daily[t] >= STREAK_MIN_CARDS && lastStudyDate !== t) {
+    if (dailyAnswers[t] >= STREAK_MIN_CARDS && lastStudyDate !== t) {
       studyStreak = oldStats.lastStudyDate === yesterday ? studyStreak + 1 : 1
       lastStudyDate = t
     }
 
-    return { daily, dailySeen, studyStreak, lastStudyDate }
+    return { daily, dailySeen, dailyAnswers, dailyNewAnswers, studyStreak, lastStudyDate }
   }
 
   function scheduleCard(card, grade) {
@@ -3204,7 +3214,7 @@ export default function App() {
 
     setStats(prevRaw => {
       const prev = safeStats(prevRaw)
-      const dailyPatch = markDailyDone(prev, current.id)
+      const dailyPatch = markDailyDone(prev, current.id, isNewCard)
       const newXp = Math.max(0, (prev.xp || 0) + xpDelta)
       const newStreak = isCorrect ? (prev.streak || 0) + 1 : 0
       const historyItem = {
