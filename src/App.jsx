@@ -2255,6 +2255,7 @@ export default function App() {
   const [sessionToken, setSessionToken] = useState('')
   const [login, setLogin] = useState('')
   const [senha, setSenha] = useState('')
+  const [studyScorePulse, setStudyScorePulse] = useState(false)
   const [rememberLogin, setRememberLogin] = useState(() => {
     try {
       return localStorage.getItem(REMEMBER_LOGIN_KEY) === 'true'
@@ -2298,6 +2299,7 @@ export default function App() {
   const [timeChallenge, setTimeChallenge] = useState(false)
   const [challengeLeft, setChallengeLeft] = useState(30)
   const answerRef = useRef(null)
+  const lastStudyScoreRef = useRef(null)
   const drainingSyncOutbox = useRef(false)
 
   async function loginThroughProxy(email, password) {
@@ -2739,6 +2741,7 @@ export default function App() {
     currentTagText.includes('unicamp') ? { key: 'unicamp', label: 'Unicamp' } : null
   ].filter(Boolean)
   const todayDone = dailyAnswerCount(stats, todayKey())
+  const todayReviewCards = Math.max(0, todayDone - todayNewCards)
   const remainingToday = Math.max(0, Number(config.dailyGoal || 0) - todayDone)
   const totalAnswered = Number(stats.correct || 0) + Number(stats.wrong || 0)
   const accuracy = totalAnswered ? Math.round((Number(stats.correct || 0) / totalAnswered) * 100) : 0
@@ -2841,9 +2844,9 @@ export default function App() {
     <>
       <section className="stats stats-summary">
         <div className="stat-card stat-deck-total"><Target/><span>Total no deck</span><b>{activeCards.length}</b><small>{seenDeckCount} vistos ({seenDeckPercent}%)</small></div>
-        <div className="stat-card stat-today"><ListChecks/><span>Estudados hoje</span><b>{todayDone}</b><small>{todayNewCards} ineditos + {Math.max(0, todayDone - todayNewCards)} revisoes</small></div>
+        <div className="stat-card stat-today"><ListChecks/><span>Estudados hoje</span><b>{todayDone}</b><small>{todayNewCards} ineditos + {todayReviewCards} revisoes</small></div>
         <div className="stat-card stat-new-today"><Plus/><span>Ineditos hoje</span><b>{todayNewCards}</b></div>
-        <div className="stat-card stat-review-today"><RotateCcw/><span>Revisoes hoje</span><b>{Math.max(0, todayDone - todayNewCards)}</b></div>
+        <div className="stat-card stat-review-today"><RotateCcw/><span>Revisoes hoje</span><b>{todayReviewCards}</b></div>
         <div className="stat-card stat-target-daily"><Trophy/><span>Meta diaria ate {targetDateLabel}</span><b>{dailyTargetToFinish}</b><small>{daysUntilTarget} dias restantes</small></div>
         <div className="stat-card stat-seen-deck"><Eye/><span>Ja vistos</span><b>{seenDeckCount}</b><small>{seenDeckPercent}% do deck</small></div>
         <div className="stat-card"><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
@@ -2861,6 +2864,20 @@ export default function App() {
       {false && <div className="bar"><div style={{width: `${progress}%`}} /></div>}
     </>
   )
+
+  useEffect(() => {
+    if (lastStudyScoreRef.current == null) {
+      lastStudyScoreRef.current = todayDone
+      return
+    }
+    if (todayDone > lastStudyScoreRef.current) {
+      setStudyScorePulse(true)
+      const timer = window.setTimeout(() => setStudyScorePulse(false), 650)
+      lastStudyScoreRef.current = todayDone
+      return () => window.clearTimeout(timer)
+    }
+    lastStudyScoreRef.current = todayDone
+  }, [todayDone])
 
   useEffect(() => {
     if (!ready) return
@@ -4048,6 +4065,9 @@ export default function App() {
             <>
               {(currentStageBadge || currentExamBadges.length > 0) && (
                 <div className="exam-badges" aria-label="Tags de prova">
+                  <span className={`study-score-pill ${studyScorePulse ? 'pulse' : ''}`} title="Estudados hoje">
+                    Hoje {todayDone} · I {todayNewCards} R {todayReviewCards}
+                  </span>
                   {currentStageBadge && (
                     <span className={`study-stage-badge ${currentStageBadge.className}`}>{currentStageBadge.label}</span>
                   )}
