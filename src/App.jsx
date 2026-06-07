@@ -2000,12 +2000,20 @@ function mergeImportedCards(oldCards, importedCards) {
 function getCardView(card) {
   if (!card) return null
 
-  const rawFront = String(card.htmlFront || card.pergunta || '')
-  const rawBack = String(card.htmlBack || card.resposta || '')
+  const rawFront = String(cardFrontHtml(card) || '')
+  const rawBack = String(cardBackHtml(card) || '')
   const source = rawFront.includes('{{c') ? rawFront : `${rawFront}<br>${rawBack}`
   const cloze = extractClozeText(source)
 
-  if (!cloze.isCloze) return card
+  if (!cloze.isCloze) {
+    return {
+      ...card,
+      htmlFront: rawFront,
+      htmlBack: rawBack,
+      pergunta: stripHtml(rawFront) || card.pergunta || '',
+      resposta: stripHtml(rawBack) || card.resposta || ''
+    }
+  }
 
   const frontHtml = cloze.front
   const backHtml = cloze.answers.map((a, i) => `${i + 1}. ${a}`).join('<br>')
@@ -2116,6 +2124,14 @@ function hasVisibleHtmlContent(html) {
 
 function firstVisibleHtml(...values) {
   return values.find(value => hasVisibleHtmlContent(value)) || ''
+}
+
+function cardFrontHtml(card) {
+  return firstVisibleHtml(card?.htmlFront, card?.html_front, card?.frontHtml, card?.pergunta, card?.question, card?.front)
+}
+
+function cardBackHtml(card) {
+  return firstVisibleHtml(card?.htmlBack, card?.html_back, card?.backHtml, card?.resposta, card?.answer, card?.back, card?.verso)
 }
 
 function HtmlContent({ html, className, compactParagraphs = false }) {
@@ -2878,7 +2894,14 @@ export default function App() {
   const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
   const currentView = current ? getCardView(current) : null
   const currentFeedbackAnswerHtml = feedback?.cardId === current?.id
-    ? firstVisibleHtml(feedback.expectedHtml, currentView?.htmlBack, currentView?.resposta, feedback.expected)
+    ? firstVisibleHtml(
+      feedback.expectedHtml,
+      cardBackHtml(currentView),
+      cardBackHtml(current),
+      editBackRef.current,
+      editBack,
+      feedback.expected
+    )
     : ''
   const currentStageBadge = current ? reviewStageDetails(current) : null
   const currentTagText = normalize(String(current?.tags || ''))
@@ -3437,7 +3460,7 @@ export default function App() {
     const scheduleLabel = nextSchedule.label
     const expectedHtml = cardForAnswer.isCloze && cardForAnswer.clozeAnswers?.length
       ? cardForAnswer.clozeAnswers.join(' / ')
-      : firstVisibleHtml(cardForAnswer.htmlBack, cardForAnswer.resposta)
+      : cardBackHtml(cardForAnswer)
 
     setFeedback({
       cardId: current.id,
