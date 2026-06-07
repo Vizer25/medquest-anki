@@ -184,6 +184,7 @@ const DEFAULT_CONFIG = {
   easyDays: 4,
   dailyGoal: 100,
   newDailyGoal: 40,
+  targetDate: '2026-09-30',
   fsrsRetention: DEFAULT_FSRS_RETENTION
 }
 
@@ -250,6 +251,19 @@ function dateKey(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${date.getFullYear()}-${month}-${day}`
+}
+
+function targetDateFromConfig(config = {}) {
+  const raw = String(config.targetDate || DEFAULT_CONFIG.targetDate || '').trim()
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return new Date(2026, 8, 30, 23, 59, 59, 999)
+  const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 23, 59, 59, 999)
+  if (Number.isNaN(parsed.getTime())) return new Date(2026, 8, 30, 23, 59, 59, 999)
+  return parsed
+}
+
+function shortDateLabel(date) {
+  return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 function openLocalDb() {
@@ -2724,7 +2738,8 @@ export default function App() {
   const seenDeckPercent = activeCards.length ? Math.round((seenDeckCount / activeCards.length) * 100) : 0
   const masteredCount = activeCards.filter(card => learningLevel(card) >= MASTERED_LEVEL).length
   const remainingLearningSteps = activeCards.reduce((sum, card) => sum + Math.max(0, MASTERED_LEVEL - learningLevel(card)), 0)
-  const targetDate = new Date(new Date().getFullYear(), 8, 30, 23, 59, 59, 999)
+  const targetDate = targetDateFromConfig(config)
+  const targetDateLabel = shortDateLabel(targetDate)
   const daysUntilTarget = Math.max(1, Math.ceil((targetDate.getTime() - Date.now()) / DAY))
   const dailyTargetToFinish = Math.ceil(remainingLearningSteps / daysUntilTarget)
   const masteredResponses = masteredCount
@@ -2821,7 +2836,7 @@ export default function App() {
         <div className="stat-card stat-today"><ListChecks/><span>Estudados hoje</span><b>{todayDone}</b><small>{todayNewCards} ineditos + {Math.max(0, todayDone - todayNewCards)} revisoes</small></div>
         <div className="stat-card stat-new-today"><Plus/><span>Ineditos hoje</span><b>{todayNewCards}</b></div>
         <div className="stat-card stat-review-today"><RotateCcw/><span>Revisoes hoje</span><b>{Math.max(0, todayDone - todayNewCards)}</b></div>
-        <div className="stat-card stat-target-daily"><Trophy/><span>Meta diaria ate 30/09</span><b>{dailyTargetToFinish}</b><small>{daysUntilTarget} dias restantes</small></div>
+        <div className="stat-card stat-target-daily"><Trophy/><span>Meta diaria ate {targetDateLabel}</span><b>{dailyTargetToFinish}</b><small>{daysUntilTarget} dias restantes</small></div>
         <div className="stat-card stat-seen-deck"><Eye/><span>Ja vistos</span><b>{seenDeckCount}</b><small>{seenDeckPercent}% do deck</small></div>
         <div className="stat-card"><BarChart3/><span>Precisão geral</span><b>{accuracy}%</b></div>
         <div className="stat-card stat-streak"><Flame/><span>Streak</span><b>{stats.studyStreak}</b><small>dias com meta batida</small></div>
@@ -4406,6 +4421,7 @@ export default function App() {
           <div className="settings-grid">
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
             <label>Meta de inéditos/dia<input type="number" min="1" value={configuredNewDailyGoal(config)} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
+            <label>Data da meta<input type="date" value={config.targetDate || DEFAULT_CONFIG.targetDate} onChange={e=>setConfig({...config, targetDate:e.target.value || DEFAULT_CONFIG.targetDate})}/></label>
           </div>
         </section>
       )}
