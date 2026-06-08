@@ -15,12 +15,15 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
+  getDocsFromServer,
   getFirestore,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
   setDoc,
+  waitForPendingWrites,
 } from 'firebase/firestore'
 import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs'
 import JSZip from 'jszip'
@@ -429,12 +432,13 @@ function chunkText(text, size = FIRESTORE_PAYLOAD_CHUNK_SIZE) {
   return chunks
 }
 
-async function readFirebaseCardPayload(userId, snapshot) {
+async function readFirebaseCardPayload(userId, snapshot, options = {}) {
   const data = snapshot.data()
   if (data?.payload && typeof data.payload === 'object') return data.payload
   if (!data?.payloadChunked) return data
 
-  const chunkSnaps = await getDocs(collection(firestoreDb, 'users', userId, 'cards', snapshot.id, 'payloadChunks'))
+  const readChunks = options.server ? getDocsFromServer : getDocs
+  const chunkSnaps = await readChunks(collection(firestoreDb, 'users', userId, 'cards', snapshot.id, 'payloadChunks'))
   const text = chunkSnaps.docs
     .sort((a, b) => a.id.localeCompare(b.id))
     .map(item => item.data()?.text || '')
@@ -506,19 +510,22 @@ function waitForFirebaseUser(timeoutMs = 3000) {
   })
 }
 
-async function getFirebaseProfile(authedUser) {
+async function getFirebaseProfile(authedUser, options = {}) {
   const userId = cloudUserId(authedUser)
   if (!userId) return null
 
+  const readUser = options.server ? getDocFromServer : getDoc
+  const readCards = options.server ? getDocsFromServer : getDocs
+
   const [userSnap, cardSnaps] = await Promise.all([
-    getDoc(firestoreUserRef(userId)),
-    getDocs(collection(firestoreDb, 'users', userId, 'cards'))
+    readUser(firestoreUserRef(userId)),
+    readCards(collection(firestoreDb, 'users', userId, 'cards'))
   ])
 
   const userData = userSnap.exists() ? userSnap.data() : {}
   const cards = []
   for (const snapshot of cardSnaps.docs) {
-    const payload = await readFirebaseCardPayload(userId, snapshot)
+    const payload = await readFirebaseCardPayload(userId, snapshot, options)
     if (payload?.id) cards.push(payload)
   }
 
@@ -526,7 +533,8 @@ async function getFirebaseProfile(authedUser) {
     cards,
     stats: userData?.stats && typeof userData.stats === 'object' ? userData.stats : null,
     firebaseReady: true,
-    email: userData?.email || authedUser.email || null
+    email: userData?.email || authedUser.email || null,
+    source: options.server ? 'server' : 'cache'
   }
 }
 
@@ -545,6 +553,8 @@ async function saveFirebaseProfile(authedUser, nextCards, nextStats) {
   if (Array.isArray(nextCards) && nextCards.length) {
     await saveFirebaseCardsBatch(authedUser, nextCards)
   }
+
+  await withTimeout(waitForPendingWrites(firestoreDb), 15000, 'Firebase nao confirmou as gravacoes a tempo.')
 }
 
 async function saveFirebaseCard(authedUser, card, event = null) {
@@ -592,6 +602,10 @@ async function saveFirebaseCardsBatch(authedUser, cardBatch) {
 
   if (failed.length && synced === 0) {
     throw new Error(`Firebase nao salvou o lote: ${firebaseErrorSummary(failed[0].error)}`)
+  }
+
+  if (synced > 0) {
+    await withTimeout(waitForPendingWrites(firestoreDb), 15000, 'Firebase nao confirmou as gravacoes a tempo.')
   }
 
   return { synced, failed: failed.length }
@@ -2093,28 +2107,78 @@ function compactRepeatedBreaks(container) {
   })
 }
 
-function normalizeEditorSpacing(container, lineHeight = '1.5', paragraphGap = '6px') {
+function hasVisibleNodeContent(node) {
+  if (!node) return false
+  if (node.nodeType === Node.TEXT_NODE) return Boolean(String(node.textContent || '').replace(/\u00a0/g, '').trim())
+  if (node.nodeType !== Node.ELEMENT_NODE) return false
+  if (['IMG', 'VIDEO', 'AUDIO', 'TABLE', 'UL', 'OL', 'IFRAME', 'SVG'].includes(node.tagName)) return true
+  if (node.tagName === 'BR') return false
+  return Boolean(String(node.textContent || '').replace(/\u00a0/g, '').trim())
+}
+
+function wrapLooseLineBreaks(container) {
   if (!container) return
-  const nodesToCompact = [container, ...container.querySelectorAll('p,div,li,span')]
+  const childNodes = Array.from(container.childNodes)
+  if (!childNodes.some(node => node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR')) return
+
+  const nextChildren = []
+  let lineNodes = []
+  const blockTags = new Set(['P', 'DIV', 'LI', 'UL', 'OL', 'TABLE', 'IMG', 'VIDEO', 'AUDIO', 'IFRAME', 'SVG'])
+
+  const flushLine = () => {
+    if (!lineNodes.some(hasVisibleNodeContent)) {
+      lineNodes = []
+      return
+    }
+    const line = document.createElement('div')
+    lineNodes.forEach(node => line.appendChild(node))
+    nextChildren.push(line)
+    lineNodes = []
+  }
+
+  childNodes.forEach(node => {
+    if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR') {
+      flushLine()
+      return
+    }
+    if (node.nodeType === Node.ELEMENT_NODE && blockTags.has(node.tagName)) {
+      flushLine()
+      nextChildren.push(node)
+      return
+    }
+    lineNodes.push(node)
+  })
+  flushLine()
+
+  container.replaceChildren(...nextChildren)
+}
+
+function normalizeEditorSpacing(container, lineHeight = '1.35', paragraphGap = '4px') {
+  if (!container) return
+  wrapLooseLineBreaks(container)
+  const nodesToCompact = [container, ...container.querySelectorAll('p,div,li')]
   nodesToCompact.forEach(compactRepeatedBreaks)
-  const topBlocks = Array.from(container.children).filter(node => ['P', 'DIV'].includes(node.tagName))
-  topBlocks.forEach(block => {
+  const blocks = Array.from(container.querySelectorAll('p,div,li'))
+  if (['P', 'DIV', 'LI'].includes(container.tagName)) blocks.unshift(container)
+  blocks.forEach(block => {
     const hasMedia = Boolean(block.querySelector('img,video,audio,table,ul,ol,iframe,svg'))
     const text = String(block.textContent || '').replace(/\u00a0/g, '').trim()
     if (!text && !hasMedia) {
       block.remove()
       return
     }
+    block.style.marginTop = '0'
     block.style.margin = `0 0 ${paragraphGap}`
     block.style.lineHeight = lineHeight
-    block.style.whiteSpace = 'pre-wrap'
+    block.style.whiteSpace = 'normal'
+    block.style.textAlign = 'left'
   })
-  const remainingBlocks = Array.from(container.children).filter(node => ['P', 'DIV'].includes(node.tagName))
+  const remainingBlocks = Array.from(container.children).filter(node => ['P', 'DIV', 'LI'].includes(node.tagName))
   const lastBlock = remainingBlocks[remainingBlocks.length - 1]
   if (lastBlock) lastBlock.style.marginBottom = '0'
 }
 
-function normalizeRichHtmlSpacing(html, lineHeight = '1.5', paragraphGap = '6px') {
+function normalizeRichHtmlSpacing(html, lineHeight = '1.35', paragraphGap = '4px') {
   const safeHtml = removeImageFallbackText(html)
   if (typeof document === 'undefined') return safeHtml
   const container = document.createElement('div')
@@ -2146,19 +2210,19 @@ function HtmlContent({ html, className, compactParagraphs = false }) {
   const contentRef = useRef(null)
   const safeHtml = useMemo(() => (
     compactParagraphs
-      ? normalizeRichHtmlSpacing(html, '1.45', '6px')
+      ? normalizeRichHtmlSpacing(html, '1.35', '4px')
       : removeImageFallbackText(html)
   ), [html, compactParagraphs])
 
   useEffect(() => {
-    if (compactParagraphs) normalizeEditorSpacing(contentRef.current, '1.45', '6px')
+    if (compactParagraphs) normalizeEditorSpacing(contentRef.current, '1.35', '4px')
     hideBrokenImages(contentRef.current)
   }, [safeHtml, compactParagraphs])
 
   return <div ref={contentRef} className={className} dangerouslySetInnerHTML={{ __html: safeHtml }} />
 }
 
-function RichTextEditor({ value, onChange, lineHeight = '1.5', paragraphGap = '6px' }) {
+function RichTextEditor({ value, onChange, lineHeight = '1.35', paragraphGap = '4px' }) {
   const editorRef = useRef(null)
   const lastHtmlRef = useRef(null)
   const savedSelectionRef = useRef(null)
@@ -2268,7 +2332,7 @@ function RichTextEditor({ value, onChange, lineHeight = '1.5', paragraphGap = '6
   function handleEditorKeyDown(event) {
     if (event.key === 'Enter') {
       event.preventDefault()
-      document.execCommand('insertLineBreak')
+      document.execCommand('insertParagraph')
       emitChange()
       saveSelection()
       return
@@ -2444,9 +2508,9 @@ export default function App() {
     return data
   }
 
-  async function getProfileThroughProxy(authedUser, token) {
+  async function getProfileThroughProxy(authedUser, token, options = {}) {
     if (!token) return null
-    if (token === FIREBASE_CLOUD_TOKEN) return getFirebaseProfile(authedUser)
+    if (token === FIREBASE_CLOUD_TOKEN) return getFirebaseProfile(authedUser, options)
 
     const response = await fetch(`/api/profile?id=${encodeURIComponent(authedUser.id)}`, {
       headers: { authorization: `Bearer ${token}` }
@@ -2625,12 +2689,63 @@ export default function App() {
       } else {
         setSyncStatus(`${label} sincronizados na nuvem.`)
       }
+      return { synced: syncedTotal, failed: failedTotal }
     } catch (err) {
       console.warn('Sincronizacao em lote adiada.', err)
       await queueLocalSyncItems(cardsToSync.map(card => ({ card }))).catch(queueErr => {
         console.warn('Nao foi possivel enfileirar lote local.', queueErr)
       })
       setSyncStatus(`Falha de sincronizacao: ${firebaseErrorSummary(err)}. Importacao ficou salva neste navegador; tentarei sincronizar depois.`)
+      return { synced: 0, failed: cardsToSync.length, error: err }
+    }
+  }
+
+  async function forceFullDeckUpload(reason = 'Envio completo do deck') {
+    if (!user || sessionToken !== FIREBASE_CLOUD_TOKEN) {
+      setSyncStatus('Entre na conta Firebase neste navegador antes de enviar o deck completo.')
+      return
+    }
+
+    const localDeck = latestCardsRef.current || cards
+    const localActive = activeCardCount(localDeck)
+    if (!hasRealLocalDeck(localDeck)) {
+      setSyncStatus('Este navegador nao tem o deck completo local para enviar.')
+      return
+    }
+
+    setSyncStatus(`${reason}: conferindo servidor Firebase...`)
+    let serverActive = 0
+    try {
+      const serverData = await getProfileThroughProxy(user, sessionToken, { server: true })
+      serverActive = activeCardCount(serverData?.cards || [])
+    } catch (err) {
+      console.warn('Nao foi possivel conferir servidor antes do envio completo.', err)
+    }
+
+    if (serverActive >= localActive) {
+      setSyncStatus(`Nuvem confirmada: ${serverActive} cards no Firebase.`)
+      return
+    }
+
+    setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}. Enviando deck completo para a nuvem...`)
+    const result = await syncCardsInChunks(localDeck, `Deck completo (${localActive} cards)`, user, sessionToken)
+    if (result?.failed) return
+
+    await saveProfileThroughProxy(user, sessionToken, undefined, stats).catch(err => {
+      console.warn('Stats apos envio completo adiados.', err)
+    })
+
+    try {
+      const confirmed = await getProfileThroughProxy(user, sessionToken, { server: true })
+      const confirmedActive = activeCardCount(confirmed?.cards || [])
+      setSyncStatus(
+        confirmedActive >= localActive
+          ? `Deck completo confirmado na nuvem: ${confirmedActive} cards.`
+          : `Envio feito, mas o servidor ainda mostra ${confirmedActive} de ${localActive}; mantendo deck local e tentando novamente depois.`
+      )
+    } catch (err) {
+      console.warn('Nao foi possivel confirmar servidor apos envio completo.', err)
+      setSyncStatus('Deck completo enviado. Nao consegui confirmar o servidor agora; tente recarregar em instantes.')
     }
   }
 
@@ -2642,7 +2757,7 @@ export default function App() {
 
     let data = null
     if (token) {
-      data = await getProfileThroughProxy(authedUser, token)
+      data = await getProfileThroughProxy(authedUser, token, { server: token === FIREBASE_CLOUD_TOKEN })
     } else {
       const result = await supabase
         .from('profiles')
@@ -2799,7 +2914,7 @@ export default function App() {
         if (firebaseUser) {
           withTimeout(
             loadCloudProgress(firebaseUser, nextCards, nextStats, FIREBASE_CLOUD_TOKEN),
-            8000,
+            25000,
             'Tempo limite ao sincronizar Firebase'
           ).catch(err => {
             console.error(err)
@@ -3127,6 +3242,20 @@ export default function App() {
   }, [ready, logged, user, sessionToken])
 
   useEffect(() => {
+    if (!ready || !logged || !user || sessionToken !== FIREBASE_CLOUD_TOKEN) return
+    if (!hasRealLocalDeck(latestCardsRef.current || cards)) return
+
+    const timer = window.setTimeout(() => {
+      forceFullDeckUpload('Verificacao automatica da nuvem').catch(err => {
+        console.warn('Verificacao automatica do Firebase falhou.', err)
+        setSyncStatus(`Nao consegui confirmar a nuvem agora: ${firebaseErrorSummary(err)}`)
+      })
+    }, 5000)
+
+    return () => window.clearTimeout(timer)
+  }, [ready, logged, user, sessionToken])
+
+  useEffect(() => {
     if (!ready) return
     try {
       if (currentCardId) localStorage.setItem(CURRENT_CARD_KEY, currentCardId)
@@ -3267,7 +3396,7 @@ export default function App() {
 
       withTimeout(
         loadCloudProgress(firebaseUser, cards, stats, FIREBASE_CLOUD_TOKEN),
-        15000,
+        30000,
         'Tempo limite ao carregar progresso'
       ).catch(err => {
         console.error(err)
@@ -3842,8 +3971,8 @@ export default function App() {
   function saveEdit() {
     const editingCardId = libraryEditingId || current?.id
     if (!editingCardId) return
-    const frontHtmlToSave = normalizeRichHtmlSpacing(editFrontRef.current || editFront, '1.5', '6px')
-    const backHtmlToSave = normalizeRichHtmlSpacing(editBackRef.current || editBack, '1.5', '6px')
+    const frontHtmlToSave = normalizeRichHtmlSpacing(editFrontRef.current || editFront, '1.35', '4px')
+    const backHtmlToSave = normalizeRichHtmlSpacing(editBackRef.current || editBack, '1.35', '4px')
     const pergunta = stripHtml(frontHtmlToSave)
     const resposta = stripHtml(backHtmlToSave)
     const editedAt = new Date().toISOString()
@@ -4374,7 +4503,7 @@ export default function App() {
                         <button className="result-dot result-dot-correct" onClick={markCurrentAsCorrect} title="Marcar como acerto (Ctrl + ~)" aria-label="Marcar como acerto" type="button" />
                       ) : null}
                       <div className="answer-box">
-                        <HtmlContent html={currentAnswerPanelHtml} />
+                        <HtmlContent html={currentAnswerPanelHtml} compactParagraphs />
                       </div>
                     </>
                   ) : (
@@ -4691,6 +4820,11 @@ export default function App() {
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
             <label>Meta de inéditos/dia<input type="number" min="1" value={configuredNewDailyGoal(config)} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
             <label>Data da meta<input type="date" value={config.targetDate || DEFAULT_CONFIG.targetDate} onChange={e=>setConfig({...config, targetDate:e.target.value || DEFAULT_CONFIG.targetDate})}/></label>
+          </div>
+          <div className="actions">
+            <button className="secondary" type="button" onClick={() => forceFullDeckUpload('Envio manual do deck completo')}>
+              <Upload size={18}/> Enviar deck completo para a nuvem
+            </button>
           </div>
         </section>
       )}
