@@ -2496,6 +2496,7 @@ export default function App() {
   const localMutationAtRef = useRef(0)
   const latestCardsRef = useRef(cards)
   const latestStatsRef = useRef(stats)
+  const fullDeckSyncInFlightRef = useRef(false)
 
   async function loginThroughProxy(email, password) {
     const response = await fetch('/api/auth-login', {
@@ -2700,52 +2701,52 @@ export default function App() {
     }
   }
 
-  async function forceFullDeckUpload(reason = 'Envio completo do deck') {
+  async function ensureFirebaseDeckComplete(reason = 'Verificacao automatica da nuvem') {
     if (!user || sessionToken !== FIREBASE_CLOUD_TOKEN) {
-      setSyncStatus('Entre na conta Firebase neste navegador antes de enviar o deck completo.')
       return
     }
+    if (fullDeckSyncInFlightRef.current) return
 
     const localDeck = latestCardsRef.current || cards
     const localActive = activeCardCount(localDeck)
     if (!hasRealLocalDeck(localDeck)) {
-      setSyncStatus('Este navegador nao tem o deck completo local para enviar.')
       return
     }
 
-    setSyncStatus(`${reason}: conferindo servidor Firebase...`)
-    let serverActive = 0
+    fullDeckSyncInFlightRef.current = true
     try {
-      const serverData = await getProfileThroughProxy(user, sessionToken, { server: true })
-      serverActive = activeCardCount(serverData?.cards || [])
-    } catch (err) {
-      console.warn('Nao foi possivel conferir servidor antes do envio completo.', err)
-    }
+      let serverActive = 0
+      try {
+        const serverData = await getProfileThroughProxy(user, sessionToken, { server: true })
+        serverActive = activeCardCount(serverData?.cards || [])
+      } catch (err) {
+        console.warn('Nao foi possivel conferir servidor antes do envio completo.', err)
+      }
 
-    if (serverActive >= localActive) {
-      setSyncStatus(`Nuvem confirmada: ${serverActive} cards no Firebase.`)
-      return
-    }
+      if (serverActive >= localActive) return
 
-    setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}. Enviando deck completo para a nuvem...`)
-    const result = await syncCardsInChunks(localDeck, `Deck completo (${localActive} cards)`, user, sessionToken)
-    if (result?.failed) return
+      setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}. Sincronizando deck completo automaticamente...`)
+      const result = await syncCardsInChunks(localDeck, `Deck completo (${localActive} cards)`, user, sessionToken)
+      if (result?.failed) return
 
-    await saveProfileThroughProxy(user, sessionToken, undefined, stats).catch(err => {
-      console.warn('Stats apos envio completo adiados.', err)
-    })
+      await saveProfileThroughProxy(user, sessionToken, undefined, latestStatsRef.current || stats).catch(err => {
+        console.warn('Stats apos envio completo adiados.', err)
+      })
 
-    try {
-      const confirmed = await getProfileThroughProxy(user, sessionToken, { server: true })
-      const confirmedActive = activeCardCount(confirmed?.cards || [])
-      setSyncStatus(
-        confirmedActive >= localActive
-          ? `Deck completo confirmado na nuvem: ${confirmedActive} cards.`
-          : `Envio feito, mas o servidor ainda mostra ${confirmedActive} de ${localActive}; mantendo deck local e tentando novamente depois.`
-      )
-    } catch (err) {
-      console.warn('Nao foi possivel confirmar servidor apos envio completo.', err)
-      setSyncStatus('Deck completo enviado. Nao consegui confirmar o servidor agora; tente recarregar em instantes.')
+      try {
+        const confirmed = await getProfileThroughProxy(user, sessionToken, { server: true })
+        const confirmedActive = activeCardCount(confirmed?.cards || [])
+        setSyncStatus(
+          confirmedActive >= localActive
+            ? `Deck completo confirmado na nuvem: ${confirmedActive} cards.`
+            : `Envio feito, mas o servidor ainda mostra ${confirmedActive} de ${localActive}; mantendo deck local e tentando novamente depois.`
+        )
+      } catch (err) {
+        console.warn('Nao foi possivel confirmar servidor apos envio completo.', err)
+        setSyncStatus('Deck completo enviado. Nao consegui confirmar o servidor agora; tentarei novamente automaticamente.')
+      }
+    } finally {
+      fullDeckSyncInFlightRef.current = false
     }
   }
 
@@ -2950,6 +2951,7 @@ export default function App() {
   }, [importLog])
 
   const activeCards = useMemo(() => cards.filter(card => !card.deleted), [cards])
+  const activeDeckCount = activeCards.length
   const suspendedCount = activeCards.filter(card => card.suspended).length
   const deletedCount = cards.filter(card => card.deleted).length
   const allTags = useMemo(() => {
@@ -3246,13 +3248,25 @@ export default function App() {
     if (!hasRealLocalDeck(latestCardsRef.current || cards)) return
 
     const timer = window.setTimeout(() => {
-      forceFullDeckUpload('Verificacao automatica da nuvem').catch(err => {
+      ensureFirebaseDeckComplete('Verificacao automatica da nuvem').catch(err => {
         console.warn('Verificacao automatica do Firebase falhou.', err)
         setSyncStatus(`Nao consegui confirmar a nuvem agora: ${firebaseErrorSummary(err)}`)
       })
     }, 5000)
 
     return () => window.clearTimeout(timer)
+  }, [ready, logged, user, sessionToken, activeDeckCount])
+
+  useEffect(() => {
+    if (!ready || !logged || !user || sessionToken !== FIREBASE_CLOUD_TOKEN) return
+
+    const timer = window.setInterval(() => {
+      ensureFirebaseDeckComplete('Verificacao periodica da nuvem').catch(err => {
+        console.warn('Verificacao periodica do Firebase falhou.', err)
+      })
+    }, 60000)
+
+    return () => window.clearInterval(timer)
   }, [ready, logged, user, sessionToken])
 
   useEffect(() => {
@@ -4254,6 +4268,13 @@ export default function App() {
     setCards(result.merged)
     persistLocalStateNow(result.merged, stats)
     syncCardsInChunks(result.createdCards, 'Cards novos importados')
+    if (sessionToken === FIREBASE_CLOUD_TOKEN) {
+      window.setTimeout(() => {
+        ensureFirebaseDeckComplete('Conferencia automatica apos importacao').catch(err => {
+          console.warn('Conferencia automatica apos importacao falhou.', err)
+        })
+      }, 3000)
+    }
     setIndex(0)
     setImportLog(buildMessage(result))
     return result
@@ -4820,11 +4841,6 @@ export default function App() {
             <label>Meta diária<input type="number" value={config.dailyGoal} onChange={e=>setConfig({...config, dailyGoal:Number(e.target.value)})}/></label>
             <label>Meta de inéditos/dia<input type="number" min="1" value={configuredNewDailyGoal(config)} onChange={e=>setConfig({...config, newDailyGoal:Number(e.target.value)})}/></label>
             <label>Data da meta<input type="date" value={config.targetDate || DEFAULT_CONFIG.targetDate} onChange={e=>setConfig({...config, targetDate:e.target.value || DEFAULT_CONFIG.targetDate})}/></label>
-          </div>
-          <div className="actions">
-            <button className="secondary" type="button" onClick={() => forceFullDeckUpload('Envio manual do deck completo')}>
-              <Upload size={18}/> Enviar deck completo para a nuvem
-            </button>
           </div>
         </section>
       )}
