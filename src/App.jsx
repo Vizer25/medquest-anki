@@ -108,7 +108,6 @@ try {
 const DAY = 24 * 60 * 60 * 1000
 const STREAK_MIN_CARDS = 10
 const DEFAULT_FSRS_RETENTION = 0.91
-const LEARNING_RESET_VERSION = 'ladder-reset-2026-06-02-v3'
 const LEARNING_STEPS = [
   { level: 0, label: '10 minutos', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
   { level: 1, label: '10 minutos', delayMs: 10 * 60 * 1000, scheduledDays: 0 },
@@ -1740,6 +1739,15 @@ function activeCardCount(cardList) {
   return Array.isArray(cardList) ? cardList.filter(card => card && !card.deleted).length : 0
 }
 
+function isDefaultOnlyDeck(cardList) {
+  const active = Array.isArray(cardList) ? cardList.filter(card => card && !card.deleted) : []
+  return active.length === 1 && String(active[0]?.id || '') === 'default-1'
+}
+
+function hasRealLocalDeck(cardList) {
+  return activeCardCount(cardList) > 0 && !isDefaultOnlyDeck(cardList)
+}
+
 function cardProgressScore(card) {
   if (!card || typeof card !== 'object') return 0
   const attempts = Number(card.reviewAttempts || card.siteReps || card.reps || 0)
@@ -2603,6 +2611,7 @@ export default function App() {
       let failedTotal = 0
       let syncedTotal = 0
       for (let i = 0; i < cardsToSync.length; i += chunkSize) {
+        setSyncStatus(`${label}: enviando ${Math.min(i + chunkSize, cardsToSync.length)} de ${cardsToSync.length} para a nuvem...`)
         const result = await syncCardsBatchThroughProxy(cardsToSync.slice(i, i + chunkSize), authUser, token)
         syncedTotal += Number(result?.synced || 0)
         failedTotal += Number(result?.failed || 0)
@@ -2655,9 +2664,10 @@ export default function App() {
     let cardsToUse = hasCloudCards ? data.cards : seedCards
     const localActive = activeCardCount(seedCards)
     const cloudActive = activeCardCount(cardsToUse)
-    const hasLocalCards = Array.isArray(seedCards) && seedCards.length > 0 && seedCards !== DEFAULT_CARDS
+    const hasLocalCards = hasRealLocalDeck(seedCards)
     const shouldMergeLocal = hasCloudCards && hasLocalCards
     const localDeckIsLarger = hasCloudCards && localActive > cloudActive
+    const shouldUploadLocalDeck = token === FIREBASE_CLOUD_TOKEN && hasLocalCards && (!hasCloudCards || localActive > cloudActive)
 
     if (shouldMergeLocal) {
       cardsToUse = mergeCardSources(data.cards, seedCards)
@@ -2672,9 +2682,34 @@ export default function App() {
       setSyncStatus('Nuvem carregou atrasada; mantive suas alteracoes locais recentes.')
       const latestCards = latestCardsRef.current || seedCards
       const latestStats = latestStatsRef.current || seedStats
-      const diffCards = hasCloudCards ? cloudDiffCards(data.cards, latestCards) : latestCards
+      const latestHasRealDeck = hasRealLocalDeck(latestCards)
+      const latestActive = activeCardCount(latestCards)
+      if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && (!hasCloudCards || latestActive > activeCardCount(data?.cards || []))) {
+        setSyncStatus(`Firebase incompleto (${activeCardCount(data?.cards || [])} de ${latestActive}). Enviando deck completo para a nuvem...`)
+        syncCardsInChunks(latestCards, `Deck completo (${latestActive} cards)`, authedUser, token)
+          .then(() => saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data?.stats, latestStats)))
+          .catch(err => {
+            console.warn('Upload completo do deck adiado.', err)
+            setSyncStatus(`Deck local preservado. Falha ao enviar tudo para a nuvem: ${firebaseErrorSummary(err)}`)
+          })
+        return
+      }
+      const diffCards = hasCloudCards ? cloudDiffCards(data.cards, latestCards) : (latestHasRealDeck ? latestCards : [])
       if (diffCards.length) syncCardsInChunks(diffCards, `${diffCards.length} alteracoes locais recentes`, authedUser, token)
       if (hasCloudStats) saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data.stats, latestStats)).catch(err => console.warn('Stats recentes adiados.', err))
+      return
+    }
+
+    if (shouldUploadLocalDeck) {
+      const deckForCloud = shouldMergeLocal ? cardsToUse : seedCards
+      const count = activeCardCount(deckForCloud)
+      setSyncStatus(`Firebase incompleto (${cloudActive} de ${localActive}). Enviando deck completo para a nuvem...`)
+      syncCardsInChunks(deckForCloud, `Deck completo (${count} cards)`, authedUser, token)
+        .then(() => saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data?.stats, seedStats)))
+        .catch(err => {
+          console.warn('Upload completo do deck adiado.', err)
+          setSyncStatus(`Deck local preservado. Falha ao enviar tudo para a nuvem: ${firebaseErrorSummary(err)}`)
+        })
       return
     }
 
@@ -2792,51 +2827,6 @@ export default function App() {
     boot()
     return () => { active = false }
   }, [])
-
-  useEffect(() => {
-    if (!ready || !logged) return
-
-    let alreadyReset = false
-    try {
-      alreadyReset = localStorage.getItem('mq_learning_reset_version') === LEARNING_RESET_VERSION
-    } catch {
-      alreadyReset = false
-    }
-    if (alreadyReset) return
-
-    const now = Date.now()
-    const resetAt = new Date(now).toISOString()
-    const resetCards = cards.map(card => resetCardLearning(card, now))
-    const resetStats = {
-      ...DEFAULT_STATS,
-      learningResetAt: resetAt
-    }
-
-    setCards(resetCards)
-    setStats(resetStats)
-    persistLocalStateNow(resetCards, resetStats, { currentCardId: '' })
-    setAnswer('')
-    setFeedback(null)
-    setPendingGrade(null)
-    setFocusedCardIds([])
-    setCurrentCardId('')
-    setIndex(0)
-    setSyncStatus('Escada de aprendizado iniciada hoje. Todos os cards voltaram para ineditos.')
-
-    try {
-      localStorage.setItem('mq_learning_reset_version', LEARNING_RESET_VERSION)
-      localStorage.setItem('mq_cards', JSON.stringify(resetCards))
-      localStorage.setItem('mq_stats', JSON.stringify(resetStats))
-    } catch (err) {
-      console.warn('Nao foi possivel salvar reset local completo.', err)
-    }
-
-    if (user && sessionToken) {
-      syncCardsInChunks(resetCards, 'Deck reiniciado na escada', user, sessionToken)
-      saveProfileThroughProxy(user, sessionToken, undefined, resetStats)
-        .catch(err => console.warn('Nao foi possivel salvar estatisticas reiniciadas agora.', err))
-    }
-  }, [ready, logged])
 
   useEffect(() => {
     if (!importLog) return
@@ -3570,6 +3560,11 @@ export default function App() {
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
+    if (user && sessionToken) {
+      syncCardsInChunks(nextCards, 'Deck reiniciado na escada', user, sessionToken)
+      saveProfileThroughProxy(user, sessionToken, undefined, nextStats)
+        .catch(err => console.warn('Nao foi possivel salvar estatisticas reiniciadas agora.', err))
+    }
   }
 
 
@@ -3853,7 +3848,7 @@ export default function App() {
     const resposta = stripHtml(backHtmlToSave)
     const editedAt = new Date().toISOString()
     let updatedCard = null
-    const nextCardsForVault = cards.map(c => {
+    const nextCardsForVault = (latestCardsRef.current || cards).map(c => {
       if (c.id !== editingCardId) return c
       const latestScheduledCard = pendingGrade?.cardId === editingCardId ? pendingGrade.scheduledCard : null
       const baseCard = latestScheduledCard?.id === editingCardId ? latestScheduledCard : c
