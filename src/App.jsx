@@ -936,7 +936,7 @@ function reviewStageDetails(card) {
 
   return {
     level,
-    label: level >= MASTERED_LEVEL ? 'Aprendido' : step.label,
+    label: level >= MASTERED_LEVEL ? 'Aprendido' : level <= 1 ? `10m ${level}/2` : step.label,
     className: level >= MASTERED_LEVEL ? 'stage-learned' : level <= 1 ? 'stage-level-10m' : `stage-level-${level}`,
     progress
   }
@@ -2497,6 +2497,7 @@ export default function App() {
   const latestCardsRef = useRef(cards)
   const latestStatsRef = useRef(stats)
   const fullDeckSyncInFlightRef = useRef(false)
+  const answerSubmissionLockRef = useRef(null)
 
   async function loginThroughProxy(email, password) {
     const response = await fetch('/api/auth-login', {
@@ -3064,6 +3065,13 @@ export default function App() {
     pendingGrade?.cardId === current.id ||
     feedback?.cardId === current.id
   )
+  useEffect(() => {
+    const lockedCardId = answerSubmissionLockRef.current
+    if (!lockedCardId) return
+    if (!current?.id || lockedCardId !== current.id || (!pendingGrade && !feedback)) {
+      answerSubmissionLockRef.current = null
+    }
+  }, [current?.id, pendingGrade, feedback])
   const reviewMetricsByCard = useMemo(() => buildCardReviewMetrics(stats.history), [stats.history])
   const libraryBaseCards = useMemo(() => {
     const q = normalize(searchTerm)
@@ -3464,8 +3472,7 @@ export default function App() {
     return { daily, dailySeen, dailyAnswers, dailyNewAnswers, studyStreak, lastStudyDate }
   }
 
-  function scheduleCard(card, grade) {
-    const now = Date.now()
+  function scheduleCard(card, grade, now = Date.now()) {
     const reviewedAt = new Date(now).toISOString()
     const nextSchedule = scheduleByLearningLadder(card, grade, now)
     const isCorrectGrade = grade === 'good' || grade === 'easy'
@@ -3504,6 +3511,8 @@ export default function App() {
   function evaluate(options = {}) {
     if (!current) return
     if (currentAlreadyAnswered) return
+    if (answerSubmissionLockRef.current === current.id) return
+    answerSubmissionLockRef.current = current.id
     const timedOut = !!options?.timedOut
 
     const cardForAnswer = getCardView(current)
@@ -3522,8 +3531,10 @@ export default function App() {
     const grade = percent < 60 ? 'again' : percent < 80 ? 'hard' : percent < 90 ? 'good' : 'easy'
     const isCorrect = percent >= 80
     const xpDelta = isCorrect ? Math.max(5, Math.round(25 * percent / 100)) : -5
-    const scheduledCard = scheduleCard(current, grade)
-    const answeredAt = new Date().toISOString()
+    const answeredAtMs = Date.now()
+    const answeredAt = new Date(answeredAtMs).toISOString()
+    const originalCard = { ...current }
+    const scheduledCard = scheduleCard(originalCard, grade, answeredAtMs)
     const nextCardsAfterAnswer = cards.map(card => card.id === current.id ? scheduledCard : card)
     const prevStats = safeStats(stats)
     const dailyPatch = markDailyDone(prevStats, current.id, isNewCard)
@@ -3577,7 +3588,9 @@ export default function App() {
       correct: isCorrect,
       seconds: cardSeconds,
       answeredAt,
+      answeredAtMs,
       isNewCard,
+      originalCard,
       scheduledCard
     })
     persistLocalStateNow(nextCardsAfterAnswer, nextStatsAfterAnswer, { lastAnsweredId: current.id })
@@ -3670,6 +3683,7 @@ export default function App() {
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
+    answerSubmissionLockRef.current = null
     if (shouldClearFocus) setFocusedCardIds([])
 
     const sortedDue = focusedIds.size
@@ -3863,13 +3877,15 @@ export default function App() {
 
   function markCurrentAsCorrect() {
     if (!current || !feedback || feedback.cardId !== current.id) return
+    if (feedback.manuallyCorrected && feedback.grade === 'good') return
     const previousGrade = feedback.grade || pendingGrade?.grade || 'again'
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'good'
-    const cardToCorrect = pendingGrade?.scheduledCard || current
+    const cardToCorrect = pendingGrade?.originalCard || current
+    const correctionTime = Number(pendingGrade?.answeredAtMs || new Date(pendingGrade?.answeredAt || '').getTime() || Date.now())
 
-    const nextSchedule = previewSchedule(cardToCorrect, correctedGrade, config.fsrsRetention)
-    const correctedCard = scheduleCard(cardToCorrect, correctedGrade)
+    const nextSchedule = scheduleByLearningLadder(cardToCorrect, correctedGrade, correctionTime)
+    const correctedCard = scheduleCard(cardToCorrect, correctedGrade, correctionTime)
     const nextCardsAfterCorrection = cards.map(card => card.id === current.id ? correctedCard : card)
     const nextStatsAfterCorrection = buildManualCorrectionStats(stats, current.id, previousGrade, correctedGrade, 80, true, wasCorrect)
     setCards(nextCardsAfterCorrection)
@@ -3892,6 +3908,8 @@ export default function App() {
       percent: 80,
       correct: true,
       answeredAt: prev?.answeredAt || new Date().toISOString(),
+      answeredAtMs: prev?.answeredAtMs || correctionTime,
+      originalCard: prev?.originalCard || cardToCorrect,
       scheduledCard: correctedCard
     }))
     setFeedback(prev => prev ? {
@@ -3908,12 +3926,14 @@ export default function App() {
 
   function markCurrentAsWrong() {
     if (!current || !feedback || feedback.cardId !== current.id) return
+    if (feedback.manuallyCorrected && feedback.grade === 'again') return
     const previousGrade = feedback.grade || pendingGrade?.grade || 'good'
     const wasCorrect = feedback.percent >= 80
     const correctedGrade = 'again'
-    const cardToCorrect = pendingGrade?.scheduledCard || current
-    const nextSchedule = previewSchedule(cardToCorrect, correctedGrade, config.fsrsRetention)
-    const correctedCard = scheduleCard(cardToCorrect, correctedGrade)
+    const cardToCorrect = pendingGrade?.originalCard || current
+    const correctionTime = Number(pendingGrade?.answeredAtMs || new Date(pendingGrade?.answeredAt || '').getTime() || Date.now())
+    const nextSchedule = scheduleByLearningLadder(cardToCorrect, correctedGrade, correctionTime)
+    const correctedCard = scheduleCard(cardToCorrect, correctedGrade, correctionTime)
     const nextCardsAfterCorrection = cards.map(card => card.id === current.id ? correctedCard : card)
     const nextStatsAfterCorrection = buildManualCorrectionStats(stats, current.id, previousGrade, correctedGrade, 0, false, wasCorrect)
     setCards(nextCardsAfterCorrection)
@@ -3937,6 +3957,8 @@ export default function App() {
       percent: 0,
       correct: false,
       answeredAt: prev?.answeredAt || new Date().toISOString(),
+      answeredAtMs: prev?.answeredAtMs || correctionTime,
+      originalCard: prev?.originalCard || cardToCorrect,
       scheduledCard: correctedCard
     }))
     setFeedback(prev => prev ? {
@@ -3969,6 +3991,7 @@ export default function App() {
     setAnswer('')
     setFeedback(null)
     setPendingGrade(null)
+    answerSubmissionLockRef.current = null
     setEditing(false)
     setLibraryEditingId(null)
   }
