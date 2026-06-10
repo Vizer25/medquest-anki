@@ -1169,6 +1169,19 @@ function stripHtml(text) {
   return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim()
 }
 
+function hasHtmlMarkup(value) {
+  return /<\/?[a-z][\s\S]*>/i.test(String(value || ''))
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 function decodeHtmlEntities(value) {
   const div = document.createElement('div')
   div.innerHTML = String(value || '')
@@ -2198,12 +2211,42 @@ function firstVisibleHtml(...values) {
   return values.find(value => hasVisibleHtmlContent(value)) || ''
 }
 
+function visibleHtmlScore(value) {
+  if (!hasVisibleHtmlContent(value)) return -1
+  const source = String(value || '')
+  const textLength = stripHtml(source).length
+  const mediaWeight = (source.match(/<(img|video|audio|table|ul|ol|iframe|svg)\b/gi) || []).length * 10000
+  const structureWeight = Math.min((source.match(/<(p|div|br|li|strong|b|span|font|mark)\b/gi) || []).length, 200) * 4
+  const lineWeight = Math.min((source.match(/\r?\n/g) || []).length, 200) * 2
+  return textLength + mediaWeight + structureWeight + lineWeight
+}
+
+function richestVisibleHtml(...values) {
+  let best = ''
+  let bestScore = -1
+  values.forEach(value => {
+    const score = visibleHtmlScore(value)
+    if (score > bestScore) {
+      best = value
+      bestScore = score
+    }
+  })
+  return best || ''
+}
+
+function richEditorInitialHtml(value) {
+  const source = removeImageFallbackText(value)
+  if (!source) return ''
+  if (hasHtmlMarkup(source)) return source
+  return escapeHtml(source).replace(/\r?\n/g, '<br>')
+}
+
 function cardFrontHtml(card) {
   return firstVisibleHtml(card?.htmlFront, card?.html_front, card?.frontHtml, card?.pergunta, card?.question, card?.front)
 }
 
 function cardBackHtml(card) {
-  return firstVisibleHtml(card?.htmlBack, card?.html_back, card?.backHtml, card?.resposta, card?.answer, card?.back, card?.verso)
+  return richestVisibleHtml(card?.htmlBack, card?.html_back, card?.backHtml, card?.resposta, card?.answer, card?.back, card?.verso)
 }
 
 function HtmlContent({ html, className, compactParagraphs = false }) {
@@ -3999,9 +4042,21 @@ export default function App() {
   function startEdit() {
     if (!current) return
     const v = getCardView(current)
+    const backSource = richestVisibleHtml(
+      feedback?.cardId === current.id ? feedback.expectedHtml : '',
+      feedback?.cardId === current.id ? feedback.expected : '',
+      v.htmlBack,
+      current.htmlBack,
+      current.html_back,
+      current.backHtml,
+      current.resposta,
+      current.answer,
+      current.back,
+      current.verso
+    )
     setLibraryEditingId(null)
-    updateEditFront(v.htmlFront || v.pergunta || '')
-    updateEditBack(v.htmlBack || v.resposta || '')
+    updateEditFront(richEditorInitialHtml(v.htmlFront || v.pergunta || ''))
+    updateEditBack(richEditorInitialHtml(backSource))
     setEditing(true)
   }
 
@@ -4086,9 +4141,19 @@ export default function App() {
     const card = activeCards.find(c => c.id === cardId)
     if (!card) return
     const v = getCardView(card)
+    const backSource = richestVisibleHtml(
+      v.htmlBack,
+      card.htmlBack,
+      card.html_back,
+      card.backHtml,
+      card.resposta,
+      card.answer,
+      card.back,
+      card.verso
+    )
     setLibraryEditingId(cardId)
-    updateEditFront(v.htmlFront || v.pergunta || '')
-    updateEditBack(v.htmlBack || v.resposta || '')
+    updateEditFront(richEditorInitialHtml(v.htmlFront || v.pergunta || ''))
+    updateEditBack(richEditorInitialHtml(backSource))
     setEditing(true)
   }
 
