@@ -4316,38 +4316,348 @@ export default function App() {
     setEditBack(value)
   }
 
-  function tsvCell(value) {
+  function ankiHash(value) {
+    let hash = 2166136261
+    String(value || '').split('').forEach(char => {
+      hash ^= char.charCodeAt(0)
+      hash = Math.imul(hash, 16777619)
+    })
+    return hash >>> 0
+  }
+
+  function ankiGuid(value, index) {
+    return `mq${ankiHash(value).toString(36)}${Number(index || 0).toString(36)}`.slice(0, 20)
+  }
+
+  function sanitizeAnkiTags(value) {
     return String(value || '')
-      .replace(/\t/g, ' ')
-      .replace(/\r?\n/g, '<br>')
+      .split(/\s+/)
+      .map(tag => tag.trim().replace(/\s+/g, '_'))
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  function ankiFieldHtml(value) {
+    return richEditorInitialHtml(value)
+      .replace(/\x00/g, '')
+      .replace(/\x1f/g, ' ')
       .trim()
   }
 
-  function exportToAnki() {
-    const header = [
-      '#separator:tab',
-      '#html:true',
-      '#columns:Frente\tVerso\tTags'
-    ].join('\n')
+  function dataUrlToBytes(dataUrl) {
+    const match = String(dataUrl || '').match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/i)
+    if (!match) return null
+    const mime = match[1] || 'application/octet-stream'
+    const isBase64 = Boolean(match[2])
+    const payload = match[3] || ''
+    if (isBase64) {
+      const binary = atob(payload.replace(/\s/g, ''))
+      const bytes = new Uint8Array(binary.length)
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+      return { mime, bytes }
+    }
+    return { mime, bytes: new TextEncoder().encode(decodeURIComponent(payload)) }
+  }
 
-    const rows = activeCards.map(card => {
-      const v = getCardView(card)
-      return [
-        tsvCell(v.htmlFront || v.pergunta),
-        tsvCell(v.htmlBack || v.resposta),
-        tsvCell(v.tags || '')
-      ].join('\t')
+  function extensionForMime(mime) {
+    const clean = String(mime || '').toLowerCase()
+    if (clean.includes('png')) return 'png'
+    if (clean.includes('jpeg') || clean.includes('jpg')) return 'jpg'
+    if (clean.includes('gif')) return 'gif'
+    if (clean.includes('webp')) return 'webp'
+    if (clean.includes('svg')) return 'svg'
+    return 'bin'
+  }
+
+  function collectApkgMedia(html, mediaFiles) {
+    return String(html || '').replace(/src=(["'])([^"']+)\1/gi, (match, quote, src) => {
+      if (!/^data:/i.test(src)) return match
+      const media = dataUrlToBytes(src)
+      if (!media?.bytes?.length) return match
+      const mediaIndex = mediaFiles.length
+      const filename = `medquest-media-${mediaIndex}.${extensionForMime(media.mime)}`
+      mediaFiles.push({ zipName: String(mediaIndex), filename, bytes: media.bytes })
+      return `src="${filename}"`
     })
+  }
 
-    const content = `${header}\n${rows.join('\n')}`
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `medquest-cards-${todayKey()}.txt`
+    a.download = filename
     a.click()
-    URL.revokeObjectURL(url)
-    setImportLog(`${activeCards.length} cards exportados.`)
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  async function exportToAnki() {
+    if (importBusy) return
+    if (!activeCards.length) {
+      setImportLog('Nao ha cards para exportar.')
+      return
+    }
+
+    setImportBusy(true)
+    setImportLog('Gerando APKG...')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    try {
+      const SQL = await initSqlJs({ locateFile: () => wasmUrl })
+      const db = new SQL.Database()
+      const nowSeconds = Math.floor(Date.now() / 1000)
+      const nowMs = Date.now()
+      const deckId = nowMs
+      const modelId = nowMs + 1
+      const mediaFiles = []
+      const deckName = 'MedQuest'
+
+      db.run(`
+        CREATE TABLE col (
+          id integer primary key,
+          crt integer not null,
+          mod integer not null,
+          scm integer not null,
+          ver integer not null,
+          dty integer not null,
+          usn integer not null,
+          ls integer not null,
+          conf text not null,
+          models text not null,
+          decks text not null,
+          dconf text not null,
+          tags text not null
+        );
+        CREATE TABLE notes (
+          id integer primary key,
+          guid text not null,
+          mid integer not null,
+          mod integer not null,
+          usn integer not null,
+          tags text not null,
+          flds text not null,
+          sfld integer not null,
+          csum integer not null,
+          flags integer not null,
+          data text not null
+        );
+        CREATE TABLE cards (
+          id integer primary key,
+          nid integer not null,
+          did integer not null,
+          ord integer not null,
+          mod integer not null,
+          usn integer not null,
+          type integer not null,
+          queue integer not null,
+          due integer not null,
+          ivl integer not null,
+          factor integer not null,
+          reps integer not null,
+          lapses integer not null,
+          left integer not null,
+          odue integer not null,
+          odid integer not null,
+          flags integer not null,
+          data text not null
+        );
+        CREATE TABLE revlog (
+          id integer primary key,
+          cid integer not null,
+          usn integer not null,
+          ease integer not null,
+          ivl integer not null,
+          lastIvl integer not null,
+          factor integer not null,
+          time integer not null,
+          type integer not null
+        );
+        CREATE TABLE graves (
+          usn integer not null,
+          oid integer not null,
+          type integer not null
+        );
+        CREATE INDEX ix_notes_usn on notes (usn);
+        CREATE INDEX ix_cards_usn on cards (usn);
+        CREATE INDEX ix_revlog_usn on revlog (usn);
+        CREATE INDEX ix_cards_nid on cards (nid);
+        CREATE INDEX ix_cards_sched on cards (did, queue, due);
+        CREATE INDEX ix_revlog_cid on revlog (cid);
+        CREATE INDEX ix_notes_csum on notes (csum);
+      `)
+
+      const model = {
+        id: modelId,
+        name: 'MedQuest Basic',
+        type: 0,
+        mod: nowSeconds,
+        usn: -1,
+        sortf: 0,
+        did: deckId,
+        flds: [
+          { name: 'Frente', ord: 0, sticky: false, rtl: false, font: 'Arial', size: 20, description: '', plainText: false, collapsed: false },
+          { name: 'Verso', ord: 1, sticky: false, rtl: false, font: 'Arial', size: 20, description: '', plainText: false, collapsed: false }
+        ],
+        tmpls: [
+          {
+            name: 'Card 1',
+            ord: 0,
+            qfmt: '{{Frente}}',
+            afmt: '{{FrontSide}}<hr id="answer">{{Verso}}',
+            did: null,
+            bqfmt: '',
+            bafmt: ''
+          }
+        ],
+        css: '.card { font-family: Arial; font-size: 20px; text-align: left; color: black; background: white; } img { max-width: 100%; height: auto; }',
+        latexPre: '\\documentclass[12pt]{article}\n\\special{papersize=3in,5in}\n\\usepackage[utf8]{inputenc}\n\\usepackage{amssymb,amsmath}\n\\pagestyle{empty}\n\\setlength{\\parindent}{0in}\n\\begin{document}\n',
+        latexPost: '\\end{document}',
+        req: [[0, 'any', [0]]]
+      }
+      const deck = {
+        id: deckId,
+        name: deckName,
+        mod: nowSeconds,
+        usn: -1,
+        lrnToday: [0, 0],
+        revToday: [0, 0],
+        newToday: [0, 0],
+        timeToday: [0, 0],
+        collapsed: false,
+        browserCollapsed: false,
+        desc: 'Exportado do MedQuest.',
+        dyn: 0,
+        extendNew: 0,
+        extendRev: 0,
+        conf: 1
+      }
+      const dconf = {
+        1: {
+          id: 1,
+          mod: nowSeconds,
+          name: 'Default',
+          usn: -1,
+          maxTaken: 60,
+          autoplay: true,
+          timer: 0,
+          replayq: true,
+          new: { bury: false, delays: [1, 10], initialFactor: 2500, ints: [1, 4, 7], order: 1, perDay: 9999, separate: true },
+          rev: { bury: false, ease4: 1.3, fuzz: 0.05, ivlFct: 1, maxIvl: 36500, perDay: 9999 },
+          lapse: { delays: [10], leechAction: 0, leechFails: 8, minInt: 1, mult: 0 },
+          dyn: false,
+          newMix: 0,
+          newPerDayMinimum: 0,
+          interdayLearningMix: 0,
+          reviewOrder: 0
+        }
+      }
+      const conf = {
+        nextPos: activeCards.length + 1,
+        estTimes: true,
+        activeDecks: [deckId],
+        sortType: 'noteFld',
+        timeLim: 0,
+        sortBackwards: false,
+        addToCur: true,
+        curDeck: deckId,
+        curModel: modelId,
+        newBury: true,
+        newSpread: 0,
+        dueCounts: true,
+        collapseTime: 1200
+      }
+
+      db.run(
+        'INSERT INTO col VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          1,
+          nowSeconds,
+          nowSeconds,
+          nowMs,
+          11,
+          0,
+          -1,
+          0,
+          JSON.stringify(conf),
+          JSON.stringify({ [modelId]: model }),
+          JSON.stringify({ [deckId]: deck }),
+          JSON.stringify(dconf),
+          '{}'
+        ]
+      )
+
+      const noteInsert = db.prepare('INSERT INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      const cardInsert = db.prepare('INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+
+      activeCards.forEach((card, index) => {
+        const view = getCardView(card)
+        const noteId = nowMs + 1000 + index
+        const cardId = nowMs + 100000 + index
+        const rawFront = ankiFieldHtml(view.htmlFront || view.pergunta || card.pergunta || '')
+        const rawBack = ankiFieldHtml(view.htmlBack || view.resposta || card.resposta || '')
+        const frontHtml = collectApkgMedia(rawFront, mediaFiles)
+        const backHtml = collectApkgMedia(rawBack, mediaFiles)
+        const plainFront = stripHtml(frontHtml) || `Card ${index + 1}`
+        const tags = sanitizeAnkiTags(view.tags || card.tags || '')
+        const fields = `${frontHtml}\x1f${backHtml}`
+
+        noteInsert.run([
+          noteId,
+          ankiGuid(`${plainFront}-${card.id || index}`, index),
+          modelId,
+          nowSeconds,
+          -1,
+          tags ? ` ${tags} ` : '',
+          fields,
+          plainFront,
+          ankiHash(plainFront),
+          0,
+          ''
+        ])
+
+        cardInsert.run([
+          cardId,
+          noteId,
+          deckId,
+          0,
+          nowSeconds,
+          -1,
+          0,
+          0,
+          index + 1,
+          0,
+          2500,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          ''
+        ])
+      })
+
+      noteInsert.free()
+      cardInsert.free()
+
+      const zip = new JSZip()
+      zip.file('collection.anki2', db.export())
+      const mediaManifest = {}
+      mediaFiles.forEach(file => {
+        mediaManifest[file.zipName] = file.filename
+        zip.file(file.zipName, file.bytes)
+      })
+      zip.file('media', JSON.stringify(mediaManifest))
+      db.close()
+
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' })
+      downloadBlob(blob, `medquest-deck-${todayKey()}.apkg`)
+      setImportLog(`${activeCards.length} cards exportados em APKG${mediaFiles.length ? ` com ${mediaFiles.length} midias` : ''}.`)
+    } catch (err) {
+      console.error(err)
+      setImportLog(`Erro ao exportar APKG: ${err.message || String(err)}`)
+    } finally {
+      setImportBusy(false)
+    }
   }
 
   function applyImportedDeck(imported, buildMessage) {
@@ -4790,7 +5100,7 @@ export default function App() {
               <Upload size={18}/> Importar CSV
               <input type="file" accept=".csv,.txt" onChange={importCSV} disabled={importBusy}/>
             </label>
-            <button className="secondary" onClick={exportToAnki} disabled={importBusy}><Download size={18}/> Exportar deck</button>
+            <button className="secondary" onClick={exportToAnki} disabled={importBusy}><Download size={18}/> Exportar .APKG</button>
           </div>
         </section>
       )}
