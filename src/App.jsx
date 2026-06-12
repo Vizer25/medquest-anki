@@ -1787,6 +1787,11 @@ function hasRealLocalDeck(cardList) {
   return activeCardCount(cardList) > 0 && !isDefaultOnlyDeck(cardList)
 }
 
+function canAutoCompleteCloudDeck(localActive, cloudActive) {
+  if (!localActive || !cloudActive) return false
+  return cloudActive / localActive >= 0.8
+}
+
 function cardProgressScore(card) {
   if (!card || typeof card !== 'object') return 0
   const attempts = Number(card.reviewAttempts || card.siteReps || card.reps || 0)
@@ -2800,6 +2805,11 @@ export default function App() {
         return
       }
 
+      if (!canAutoCompleteCloudDeck(localActive, serverActive)) {
+        setSyncStatus(`${reason}: nuvem tem apenas ${serverActive} de ${localActive}; nao vou completar com deck local de outro login.`)
+        return
+      }
+
       if (serverActive >= localActive) return
 
       setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}. Sincronizando deck completo automaticamente...`)
@@ -2874,9 +2884,14 @@ export default function App() {
     const localActive = activeCardCount(seedCards)
     const cloudActive = activeCardCount(cardsToUse)
     const hasLocalCards = hasRealLocalDeck(seedCards)
-    const shouldMergeLocal = hasCloudCards && hasLocalCards
+    const canUseLocalToCompleteFirebase = token !== FIREBASE_CLOUD_TOKEN || canAutoCompleteCloudDeck(localActive, cloudActive)
+    const shouldMergeLocal = hasCloudCards && hasLocalCards && canUseLocalToCompleteFirebase
     const localDeckIsLarger = hasCloudCards && localActive > cloudActive
-    const shouldUploadLocalDeck = token === FIREBASE_CLOUD_TOKEN && hasCloudCards && hasLocalCards && localActive > cloudActive
+    const shouldUploadLocalDeck = token === FIREBASE_CLOUD_TOKEN && hasCloudCards && hasLocalCards && localActive > cloudActive && canUseLocalToCompleteFirebase
+
+    if (token === FIREBASE_CLOUD_TOKEN && hasCloudCards && hasLocalCards && localActive > cloudActive && !canUseLocalToCompleteFirebase) {
+      setSyncStatus(`Firebase carregou ${cloudActive} cards desta conta. Ignorei deck local de outro login.`)
+    }
 
     if (shouldMergeLocal) {
       cardsToUse = mergeCardSources(data.cards, seedCards)
@@ -2893,14 +2908,20 @@ export default function App() {
       const latestStats = latestStatsRef.current || seedStats
       const latestHasRealDeck = hasRealLocalDeck(latestCards)
       const latestActive = activeCardCount(latestCards)
-      if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && hasCloudCards && latestActive > activeCardCount(data?.cards || [])) {
-        setSyncStatus(`Firebase incompleto (${activeCardCount(data?.cards || [])} de ${latestActive}). Enviando deck completo para a nuvem...`)
+      const loadedCloudActive = activeCardCount(data?.cards || [])
+      const canUseLatestToCompleteFirebase = token !== FIREBASE_CLOUD_TOKEN || canAutoCompleteCloudDeck(latestActive, loadedCloudActive)
+      if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && hasCloudCards && latestActive > loadedCloudActive && canUseLatestToCompleteFirebase) {
+        setSyncStatus(`Firebase incompleto (${loadedCloudActive} de ${latestActive}). Enviando deck completo para a nuvem...`)
         syncCardsInChunks(latestCards, `Deck completo (${latestActive} cards)`, authedUser, token)
           .then(() => saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data?.stats, latestStats)))
           .catch(err => {
             console.warn('Upload completo do deck adiado.', err)
             setSyncStatus(`Deck local preservado. Falha ao enviar tudo para a nuvem: ${firebaseErrorSummary(err)}`)
           })
+        return
+      }
+      if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && hasCloudCards && latestActive > loadedCloudActive && !canUseLatestToCompleteFirebase) {
+        setSyncStatus(`Firebase carregou ${loadedCloudActive} cards desta conta. Nao completei com deck local de outro login.`)
         return
       }
       const diffCards = hasCloudCards ? cloudDiffCards(data.cards, latestCards) : (latestHasRealDeck ? latestCards : [])
