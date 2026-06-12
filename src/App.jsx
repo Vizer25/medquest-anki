@@ -3124,16 +3124,17 @@ export default function App() {
   const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
   const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
   const currentView = current ? getCardView(current) : null
+  const feedbackForCurrent = Boolean(feedback && current && feedback.cardId === current.id)
   const currentAnswerPanelHtml = firstVisibleHtml(
     editing ? editBackRef.current : '',
     editing ? editBack : '',
-    feedback?.cardId === current?.id ? feedback.expectedHtml : '',
-    feedback?.cardId === current?.id ? feedback.expected : '',
+    feedbackForCurrent ? feedback.expectedHtml : '',
+    feedbackForCurrent ? feedback.expected : '',
     cardBackHtml(currentView),
     cardBackHtml(current)
   )
   const shouldShowAnswerPanel = Boolean(
-    (feedback?.cardId === current?.id || editing) && hasVisibleHtmlContent(currentAnswerPanelHtml)
+    (feedbackForCurrent || editing) && hasVisibleHtmlContent(currentAnswerPanelHtml)
   )
   const currentStageBadge = current ? reviewStageDetails(current) : null
   const currentTagText = normalize(String(current?.tags || ''))
