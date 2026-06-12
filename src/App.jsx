@@ -40,6 +40,7 @@ const LOCAL_DB_NAME = 'medquest-local-vault'
 const LOCAL_DB_VERSION = 1
 const LOCAL_STATE_KEY = 'state'
 const LOCAL_SYNC_OUTBOX_KEY = 'sync-outbox'
+const LOCAL_LAST_USER_ID_KEY = 'mq_last_user_id'
 const FIREBASE_CLOUD_TOKEN = 'firebase-firestore'
 const FIRESTORE_PAYLOAD_CHUNK_SIZE = 650000
 const authStorage = {
@@ -336,18 +337,28 @@ async function deleteLocalVaultKeysByPrefix(prefix) {
   })
 }
 
-async function saveLocalStateSnapshot(snapshot) {
-  const now = new Date().toISOString()
-  await writeLocalVault(LOCAL_STATE_KEY, { ...snapshot, savedAt: now })
+function localStateKeyForUser(authedUserOrId) {
+  const userId = typeof authedUserOrId === 'string' ? authedUserOrId : cloudUserId(authedUserOrId)
+  return userId ? `${LOCAL_STATE_KEY}:${userId}` : LOCAL_STATE_KEY
 }
 
-async function readLocalSyncOutbox() {
-  const items = await readLocalVault(LOCAL_SYNC_OUTBOX_KEY)
+function localSyncOutboxKeyForUser(authedUserOrId) {
+  const userId = typeof authedUserOrId === 'string' ? authedUserOrId : cloudUserId(authedUserOrId)
+  return userId ? `${LOCAL_SYNC_OUTBOX_KEY}:${userId}` : LOCAL_SYNC_OUTBOX_KEY
+}
+
+async function saveLocalStateSnapshot(snapshot, key = LOCAL_STATE_KEY) {
+  const now = new Date().toISOString()
+  await writeLocalVault(key, { ...snapshot, savedAt: now })
+}
+
+async function readLocalSyncOutbox(key = LOCAL_SYNC_OUTBOX_KEY) {
+  const items = await readLocalVault(key)
   return Array.isArray(items) ? items : []
 }
 
-async function writeLocalSyncOutbox(items) {
-  await writeLocalVault(LOCAL_SYNC_OUTBOX_KEY, Array.isArray(items) ? items.slice(-1200) : [])
+async function writeLocalSyncOutbox(items, key = LOCAL_SYNC_OUTBOX_KEY) {
+  await writeLocalVault(key, Array.isArray(items) ? items.slice(-1200) : [])
 }
 
 function localSyncItemId(card, event = null) {
@@ -367,7 +378,7 @@ function compactLocalSyncItems(items = []) {
   return [...byCard.values()]
 }
 
-async function queueLocalSyncItems(itemsToQueue) {
+async function queueLocalSyncItems(itemsToQueue, key = LOCAL_SYNC_OUTBOX_KEY) {
   const incoming = (Array.isArray(itemsToQueue) ? itemsToQueue : [itemsToQueue])
     .filter(item => item?.card?.id)
     .map(item => ({
@@ -379,7 +390,7 @@ async function queueLocalSyncItems(itemsToQueue) {
 
   if (!incoming.length) return 0
 
-  const existing = compactLocalSyncItems(await readLocalSyncOutbox())
+  const existing = compactLocalSyncItems(await readLocalSyncOutbox(key))
   const byId = new Map(existing.map(item => [localSyncItemId(item.card), item]))
 
   incoming.forEach(item => {
@@ -388,7 +399,7 @@ async function queueLocalSyncItems(itemsToQueue) {
   })
 
   const queued = [...byId.values()]
-  await writeLocalSyncOutbox(queued)
+  await writeLocalSyncOutbox(queued, key)
   return queued.length
 }
 
@@ -397,7 +408,8 @@ function cleanCloudValue(value) {
 }
 
 function cloudUserId(authedUser = {}) {
-  return String(authedUser.uid || authedUser.id || '')
+  const source = authedUser || {}
+  return String(source.uid || source.id || '')
 }
 
 function firestoreCardRef(userId, cardId) {
@@ -595,7 +607,7 @@ async function saveFirebaseCardsBatch(authedUser, cardBatch) {
   }
 
   if (failed.length) {
-    await queueLocalSyncItems(failed.map(item => ({ card: item.card }))).catch(err => {
+    await queueLocalSyncItems(failed.map(item => ({ card: item.card })), localSyncOutboxKeyForUser(authedUser)).catch(err => {
       console.warn('Nao foi possivel guardar cards falhos na fila local.', err)
     })
   }
@@ -2541,6 +2553,20 @@ export default function App() {
   const latestStatsRef = useRef(stats)
   const fullDeckSyncInFlightRef = useRef(false)
   const answerSubmissionLockRef = useRef(null)
+  const localStateKeyRef = useRef(LOCAL_STATE_KEY)
+  const localSyncOutboxKeyRef = useRef(LOCAL_SYNC_OUTBOX_KEY)
+
+  function setLocalStorageScope(authedUser) {
+    const userId = cloudUserId(authedUser)
+    localStateKeyRef.current = localStateKeyForUser(userId)
+    localSyncOutboxKeyRef.current = localSyncOutboxKeyForUser(userId)
+    try {
+      if (userId) localStorage.setItem(LOCAL_LAST_USER_ID_KEY, userId)
+      else localStorage.removeItem(LOCAL_LAST_USER_ID_KEY)
+    } catch {
+      // Scope is only a local cache hint; the cloud remains the source of truth.
+    }
+  }
 
   async function loginThroughProxy(email, password) {
     const response = await fetch('/api/auth-login', {
@@ -2646,10 +2672,10 @@ export default function App() {
     syncReviewThroughProxy(card, event)
       .then(data => {
         if (data?.fallback === 'profile-json') {
-          queueLocalSyncItems({ card, event }).catch(err => console.warn('Nao foi possivel enfileirar sincronizacao.', err))
+          queueLocalSyncItems({ card, event }, localSyncOutboxKeyRef.current).catch(err => console.warn('Nao foi possivel enfileirar sincronizacao.', err))
           setSyncStatus('Salvo no backup da nuvem. Finalizando sincronizacao granular depois.')
         } else if (data?.fallback) {
-          queueLocalSyncItems({ card, event }).catch(err => console.warn('Nao foi possivel enfileirar sincronizacao.', err))
+          queueLocalSyncItems({ card, event }, localSyncOutboxKeyRef.current).catch(err => console.warn('Nao foi possivel enfileirar sincronizacao.', err))
           setSyncStatus('Banco granular ainda nao esta pronto. Progresso mantido neste navegador.')
         } else {
           drainLocalSyncOutbox().catch(err => console.warn('Fila local ainda pendente.', err))
@@ -2657,7 +2683,7 @@ export default function App() {
       })
       .catch(err => {
         console.warn('Sincronizacao granular adiada.', err)
-        queueLocalSyncItems({ card, event }).catch(queueErr => console.warn('Nao foi possivel enfileirar sincronizacao.', queueErr))
+        queueLocalSyncItems({ card, event }, localSyncOutboxKeyRef.current).catch(queueErr => console.warn('Nao foi possivel enfileirar sincronizacao.', queueErr))
         setSyncStatus(`Card salvo localmente. Erro da nuvem: ${firebaseErrorSummary(err)}`)
       })
   }
@@ -2679,7 +2705,7 @@ export default function App() {
     } catch (err) {
       console.warn('Nao foi possivel gravar estado imediato no localStorage.', err)
     }
-    saveLocalStateSnapshot(snapshot).catch(err => {
+    saveLocalStateSnapshot(snapshot, localStateKeyRef.current).catch(err => {
       console.warn('Snapshot local imediato adiado.', err)
     })
   }
@@ -2689,23 +2715,25 @@ export default function App() {
 
     drainingSyncOutbox.current = true
     try {
-      let queued = compactLocalSyncItems(await readLocalSyncOutbox())
-      await writeLocalSyncOutbox(queued)
+      const outboxKey = localSyncOutboxKeyForUser(authUser)
+      let queued = compactLocalSyncItems(await readLocalSyncOutbox(outboxKey))
+      await writeLocalSyncOutbox(queued, outboxKey)
       if (!queued.length) return
 
       for (const item of queued) {
         const data = await syncReviewThroughProxy(item.card, item.event, authUser, token)
         if (data?.fallback) throw new Error(data.fallback)
         queued = queued.filter(candidate => candidate.id !== item.id)
-        await writeLocalSyncOutbox(queued)
+        await writeLocalSyncOutbox(queued, outboxKey)
         await new Promise(resolve => window.setTimeout(resolve, 120))
       }
 
       setSyncStatus('Pendencias locais sincronizadas.')
     } catch (err) {
       console.warn('Nao foi possivel drenar fila local.', err)
-      const queued = compactLocalSyncItems(await readLocalSyncOutbox().catch(() => []))
-      await writeLocalSyncOutbox(queued).catch(() => {})
+      const outboxKey = localSyncOutboxKeyForUser(authUser)
+      const queued = compactLocalSyncItems(await readLocalSyncOutbox(outboxKey).catch(() => []))
+      await writeLocalSyncOutbox(queued, outboxKey).catch(() => {})
       if (queued.length) setSyncStatus(`${queued.length} cards aguardando a nuvem. Erro: ${firebaseErrorSummary(err)}`)
     } finally {
       drainingSyncOutbox.current = false
@@ -2737,7 +2765,7 @@ export default function App() {
       return { synced: syncedTotal, failed: failedTotal }
     } catch (err) {
       console.warn('Sincronizacao em lote adiada.', err)
-      await queueLocalSyncItems(cardsToSync.map(card => ({ card }))).catch(queueErr => {
+      await queueLocalSyncItems(cardsToSync.map(card => ({ card })), localSyncOutboxKeyForUser(authUser)).catch(queueErr => {
         console.warn('Nao foi possivel enfileirar lote local.', queueErr)
       })
       setSyncStatus(`Falha de sincronizacao: ${firebaseErrorSummary(err)}. Importacao ficou salva neste navegador; tentarei sincronizar depois.`)
@@ -2765,6 +2793,11 @@ export default function App() {
         serverActive = activeCardCount(serverData?.cards || [])
       } catch (err) {
         console.warn('Nao foi possivel conferir servidor antes do envio completo.', err)
+      }
+
+      if (serverActive === 0) {
+        setSyncStatus(`${reason}: esta conta ainda nao tem deck na nuvem; aguardando importacao manual.`)
+        return
       }
 
       if (serverActive >= localActive) return
@@ -2821,13 +2854,29 @@ export default function App() {
       setSyncStatus('Banco granular ainda nao esta pronto. Usando progresso local.')
     }
 
+    if (token === FIREBASE_CLOUD_TOKEN && !hasCloudCards) {
+      const emptyStats = safeStats(DEFAULT_STATS)
+      setCards([])
+      setStats(emptyStats)
+      setCurrentCardId('')
+      setLastAnsweredId(null)
+      latestCardsRef.current = []
+      latestStatsRef.current = emptyStats
+      localMutationAtRef.current = Date.now()
+      if (!hasCloudStats) {
+        await saveProfileThroughProxy(authedUser, token, undefined, emptyStats)
+      }
+      setSyncStatus('Firebase conectado. Esta conta ainda esta vazia; importe um deck para testar.')
+      return
+    }
+
     let cardsToUse = hasCloudCards ? data.cards : seedCards
     const localActive = activeCardCount(seedCards)
     const cloudActive = activeCardCount(cardsToUse)
     const hasLocalCards = hasRealLocalDeck(seedCards)
     const shouldMergeLocal = hasCloudCards && hasLocalCards
     const localDeckIsLarger = hasCloudCards && localActive > cloudActive
-    const shouldUploadLocalDeck = token === FIREBASE_CLOUD_TOKEN && hasLocalCards && (!hasCloudCards || localActive > cloudActive)
+    const shouldUploadLocalDeck = token === FIREBASE_CLOUD_TOKEN && hasCloudCards && hasLocalCards && localActive > cloudActive
 
     if (shouldMergeLocal) {
       cardsToUse = mergeCardSources(data.cards, seedCards)
@@ -2844,7 +2893,7 @@ export default function App() {
       const latestStats = latestStatsRef.current || seedStats
       const latestHasRealDeck = hasRealLocalDeck(latestCards)
       const latestActive = activeCardCount(latestCards)
-      if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && (!hasCloudCards || latestActive > activeCardCount(data?.cards || []))) {
+      if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && hasCloudCards && latestActive > activeCardCount(data?.cards || [])) {
         setSyncStatus(`Firebase incompleto (${activeCardCount(data?.cards || [])} de ${latestActive}). Enviando deck completo para a nuvem...`)
         syncCardsInChunks(latestCards, `Deck completo (${latestActive} cards)`, authedUser, token)
           .then(() => saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data?.stats, latestStats)))
@@ -2922,8 +2971,17 @@ export default function App() {
       let nextCurrentCardId = getStoredCurrentCardId()
 
       try {
-        const vault = await readLocalVault().catch(() => null)
-        if (vault?.cards?.length) nextCards = vault.cards
+        const rememberedUserId = localStorage.getItem(LOCAL_LAST_USER_ID_KEY) || ''
+        const vaultKeys = rememberedUserId ? [localStateKeyForUser(rememberedUserId), LOCAL_STATE_KEY] : [LOCAL_STATE_KEY]
+        let vault = null
+        for (const key of vaultKeys) {
+          const candidate = await readLocalVault(key).catch(() => null)
+          if (candidate && (Array.isArray(candidate.cards) || candidate.config || candidate.stats)) {
+            vault = candidate
+            break
+          }
+        }
+        if (Array.isArray(vault?.cards)) nextCards = vault.cards
         if (vault?.config) nextConfig = { ...DEFAULT_CONFIG, ...vault.config }
         if (vault?.stats) nextStats = safeStats(vault.stats)
         if (vault?.lastAnsweredId) nextLastAnswered = vault.lastAnsweredId
@@ -2935,7 +2993,7 @@ export default function App() {
         const savedLastAnswered = localStorage.getItem('mq_last_answered')
         const savedCurrentCardId = localStorage.getItem(CURRENT_CARD_KEY)
 
-        if (!vault?.cards?.length && savedCards) nextCards = JSON.parse(savedCards)
+        if (!Array.isArray(vault?.cards) && savedCards) nextCards = JSON.parse(savedCards)
         if (!vault?.config && savedConfig) nextConfig = { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) }
         if (!vault?.stats && savedStats) nextStats = safeStats(JSON.parse(savedStats))
         if (!vault?.lastAnsweredId && savedLastAnswered) nextLastAnswered = savedLastAnswered
@@ -2957,6 +3015,7 @@ export default function App() {
       try {
         const firebaseUser = await waitForFirebaseUser()
         if (firebaseUser) {
+          setLocalStorageScope(firebaseUser)
           withTimeout(
             loadCloudProgress(firebaseUser, nextCards, nextStats, FIREBASE_CLOUD_TOKEN),
             25000,
@@ -3225,7 +3284,7 @@ export default function App() {
         config,
         lastAnsweredId,
         currentCardId
-      }).catch(err => {
+      }, localStateKeyRef.current).catch(err => {
         console.warn('Nao foi possivel salvar cofre local.', err)
       })
     }, 800)
@@ -3452,6 +3511,7 @@ export default function App() {
         return
       }
 
+      setLocalStorageScope(firebaseUser)
       setUser(firebaseUser)
       setSessionToken(FIREBASE_CLOUD_TOKEN)
       setLogged(true)
@@ -3486,6 +3546,7 @@ export default function App() {
     setUser(null)
     setSessionToken('')
     setLogged(false)
+    setLocalStorageScope(null)
     setFeedback(null)
     setSyncStatus('')
     setSiteSeconds(0)
