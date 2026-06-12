@@ -5316,7 +5316,11 @@ export default function App() {
               {performanceDays.map(day => (
                 <div className="chart-day" key={day.key}>
                   <b>{day.count || ''}</b>
-                  <span style={{height: `${Math.max(3, (day.count / maxPerformanceCount) * 100)}%`}} className={day.count >= dailyTargetToFinish ? 'met' : ''} title={`${day.label}: ${day.count} cards`} />
+                  <span
+                    style={{height: `${Math.max(3, (day.count / maxPerformanceCount) * 100)}%`}}
+                    className={`${day.count ? 'active' : ''} ${day.count >= dailyTargetToFinish ? 'met' : ''}`.trim()}
+                    title={`${day.label}: ${day.count} cards`}
+                  />
                   <small>{day.label}</small>
                 </div>
               ))}
