@@ -14,6 +14,7 @@ import {
 import {
   collection,
   doc,
+  deleteDoc,
   getDoc,
   getDocFromServer,
   getDocs,
@@ -43,6 +44,7 @@ const LOCAL_SYNC_OUTBOX_KEY = 'sync-outbox'
 const LOCAL_LAST_USER_ID_KEY = 'mq_last_user_id'
 const FIREBASE_CLOUD_TOKEN = 'firebase-firestore'
 const FIRESTORE_PAYLOAD_CHUNK_SIZE = 650000
+const MIN_LEGACY_FIREBASE_DECK_CARDS = 1500
 const authStorage = {
   getItem(key) {
     try {
@@ -507,6 +509,37 @@ async function writeFirebaseCardPayload(userId, card) {
   }))
 }
 
+async function markFirebaseDeckInitialized(authedUser, source = 'card-sync') {
+  const userId = cloudUserId(authedUser)
+  if (!userId) return
+
+  await setDoc(firestoreUserRef(userId), {
+    email: authedUser.email || '',
+    deckInitializedAt: new Date().toISOString(),
+    deckSource: source,
+    updatedAt: new Date().toISOString()
+  }, { merge: true })
+}
+
+async function deleteFirebaseDeck(authedUser) {
+  const userId = cloudUserId(authedUser)
+  if (!userId) return 0
+
+  let deleted = 0
+  while (true) {
+    const snapshot = await getDocsFromServer(collection(firestoreDb, 'users', userId, 'cards'))
+    if (!snapshot.docs.length) break
+
+    for (let start = 0; start < snapshot.docs.length; start += 20) {
+      const batch = snapshot.docs.slice(start, start + 20)
+      await Promise.allSettled(batch.map(item => deleteDoc(item.ref)))
+      deleted += batch.length
+    }
+  }
+
+  return deleted
+}
+
 function waitForFirebaseUser(timeoutMs = 3000) {
   return new Promise(resolve => {
     let settled = false
@@ -544,6 +577,8 @@ async function getFirebaseProfile(authedUser, options = {}) {
   return {
     cards,
     stats: userData?.stats && typeof userData.stats === 'object' ? userData.stats : null,
+    deckInitializedAt: userData?.deckInitializedAt || null,
+    deckSource: userData?.deckSource || null,
     firebaseReady: true,
     email: userData?.email || authedUser.email || null,
     source: options.server ? 'server' : 'cache'
@@ -2648,7 +2683,7 @@ export default function App() {
     return data
   }
 
-  async function syncCardsBatchThroughProxy(cardBatch, authUser = user, token = sessionToken) {
+  async function syncCardsBatchThroughProxy(cardBatch, authUser = user, token = sessionToken, options = {}) {
     if (!authUser || !token || !cardBatch?.length) return null
     if (token === FIREBASE_CLOUD_TOKEN) {
       const result = await saveFirebaseCardsBatch(authUser, cardBatch)
@@ -2745,7 +2780,7 @@ export default function App() {
     }
   }
 
-  async function syncCardsInChunks(cardList, label = 'cards', authUser = user, token = sessionToken) {
+  async function syncCardsInChunks(cardList, label = 'cards', authUser = user, token = sessionToken, options = {}) {
     if (!authUser || !token || !Array.isArray(cardList) || !cardList.length) return
     const cardsToSync = cardList.filter(Boolean)
     const chunkSize = 100
@@ -2765,6 +2800,9 @@ export default function App() {
       if (failedTotal) {
         setSyncStatus(`${label}: ${syncedTotal} salvos na nuvem, ${failedTotal} aguardando nova tentativa.`)
       } else {
+        if (token === FIREBASE_CLOUD_TOKEN && options.markDeckInitialized) {
+          await markFirebaseDeckInitialized(authUser, options.deckSource || label)
+        }
         setSyncStatus(`${label} sincronizados na nuvem.`)
       }
       return { synced: syncedTotal, failed: failedTotal }
@@ -2813,7 +2851,10 @@ export default function App() {
       if (serverActive >= localActive) return
 
       setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}. Sincronizando deck completo automaticamente...`)
-      const result = await syncCardsInChunks(localDeck, `Deck completo (${localActive} cards)`, user, sessionToken)
+      const result = await syncCardsInChunks(localDeck, `Deck completo (${localActive} cards)`, user, sessionToken, {
+        markDeckInitialized: true,
+        deckSource: reason
+      })
       if (result?.failed) return
 
       await saveProfileThroughProxy(user, sessionToken, undefined, latestStatsRef.current || stats).catch(err => {
@@ -2859,12 +2900,13 @@ export default function App() {
 
     const hasCloudCards = Array.isArray(data?.cards) && data.cards.length > 0
     const hasCloudStats = data?.stats && typeof data.stats === 'object'
+    const loadedCloudActive = activeCardCount(data?.cards || [])
+    const hasTrustedFirebaseDeck = token !== FIREBASE_CLOUD_TOKEN ||
+      !hasCloudCards ||
+      Boolean(data?.deckInitializedAt) ||
+      loadedCloudActive >= MIN_LEGACY_FIREBASE_DECK_CARDS
 
-    if (data?.granularReady === false) {
-      setSyncStatus('Banco granular ainda nao esta pronto. Usando progresso local.')
-    }
-
-    if (token === FIREBASE_CLOUD_TOKEN && !hasCloudCards) {
+    async function resetThisAccountToEmpty(message) {
       const emptyStats = safeStats(DEFAULT_STATS)
       setCards([])
       setStats(emptyStats)
@@ -2873,10 +2915,52 @@ export default function App() {
       latestCardsRef.current = []
       latestStatsRef.current = emptyStats
       localMutationAtRef.current = Date.now()
-      if (!hasCloudStats) {
-        await saveProfileThroughProxy(authedUser, token, undefined, emptyStats)
+      await saveLocalStateSnapshot({
+        cards: [],
+        stats: emptyStats,
+        config,
+        lastAnsweredId: null,
+        currentCardId: ''
+      }, localStateKeyForUser(authedUser)).catch(err => console.warn('Nao foi possivel limpar cache local da conta.', err))
+      await writeLocalSyncOutbox([], localSyncOutboxKeyForUser(authedUser)).catch(err => console.warn('Nao foi possivel limpar fila local da conta.', err))
+      try {
+        localStorage.removeItem('mq_cards')
+        localStorage.removeItem('mq_stats')
+        localStorage.removeItem('mq_last_answered')
+        localStorage.removeItem(CURRENT_CARD_KEY)
+      } catch {
+        // Apenas remove cache legado que poderia vazar deck entre logins no mesmo navegador.
       }
-      setSyncStatus('Firebase conectado. Esta conta ainda esta vazia; importe um deck para testar.')
+      if (!hasCloudStats) {
+        await saveProfileThroughProxy(authedUser, token, undefined, emptyStats).catch(err => console.warn('Nao foi possivel salvar perfil vazio.', err))
+      }
+      setSyncStatus(message)
+    }
+
+    if (data?.granularReady === false) {
+      setSyncStatus('Banco granular ainda nao esta pronto. Usando progresso local.')
+    }
+
+    if (token === FIREBASE_CLOUD_TOKEN && hasCloudCards && !hasTrustedFirebaseDeck) {
+      const deleted = await deleteFirebaseDeck(authedUser).catch(err => {
+        console.warn('Nao foi possivel apagar deck contaminado.', err)
+        return 0
+      })
+      await saveProfileThroughProxy(authedUser, token, undefined, safeStats(DEFAULT_STATS)).catch(err => {
+        console.warn('Nao foi possivel salvar perfil vazio apos limpeza.', err)
+      })
+      await resetThisAccountToEmpty(`Conta limpa: removi ${deleted || loadedCloudActive} cards herdados de outro login.`)
+      return
+    }
+
+    if (token === FIREBASE_CLOUD_TOKEN && hasCloudCards && loadedCloudActive >= MIN_LEGACY_FIREBASE_DECK_CARDS && !data?.deckInitializedAt) {
+      markFirebaseDeckInitialized(authedUser, 'legacy-cloud-deck').catch(err => {
+        console.warn('Nao foi possivel marcar deck legado como inicializado.', err)
+      })
+    }
+
+    if (token === FIREBASE_CLOUD_TOKEN && !hasCloudCards) {
+      await resetThisAccountToEmpty('Firebase conectado. Esta conta ainda esta vazia; importe um deck para testar.')
       return
     }
 
@@ -2912,7 +2996,10 @@ export default function App() {
       const canUseLatestToCompleteFirebase = token !== FIREBASE_CLOUD_TOKEN || canAutoCompleteCloudDeck(latestActive, loadedCloudActive)
       if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && hasCloudCards && latestActive > loadedCloudActive && canUseLatestToCompleteFirebase) {
         setSyncStatus(`Firebase incompleto (${loadedCloudActive} de ${latestActive}). Enviando deck completo para a nuvem...`)
-        syncCardsInChunks(latestCards, `Deck completo (${latestActive} cards)`, authedUser, token)
+        syncCardsInChunks(latestCards, `Deck completo (${latestActive} cards)`, authedUser, token, {
+          markDeckInitialized: true,
+          deckSource: 'complete-local-deck-after-late-cloud'
+        })
           .then(() => saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data?.stats, latestStats)))
           .catch(err => {
             console.warn('Upload completo do deck adiado.', err)
@@ -2934,7 +3021,10 @@ export default function App() {
       const deckForCloud = shouldMergeLocal ? cardsToUse : seedCards
       const count = activeCardCount(deckForCloud)
       setSyncStatus(`Firebase incompleto (${cloudActive} de ${localActive}). Enviando deck completo para a nuvem...`)
-      syncCardsInChunks(deckForCloud, `Deck completo (${count} cards)`, authedUser, token)
+      syncCardsInChunks(deckForCloud, `Deck completo (${count} cards)`, authedUser, token, {
+        markDeckInitialized: true,
+        deckSource: 'complete-local-deck'
+      })
         .then(() => saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data?.stats, seedStats)))
         .catch(err => {
           console.warn('Upload completo do deck adiado.', err)
@@ -2947,7 +3037,10 @@ export default function App() {
       if (!localDeckIsLarger) {
         setSyncStatus(`Recuperando backup antigo: ${data.legacyCardCount || data.cards.length} cards encontrados. Sincronizando em lotes...`)
       }
-      syncCardsInChunks(cardsToUse, shouldMergeLocal ? 'Deck local preservado' : 'Backup antigo recuperado', authedUser, token)
+      syncCardsInChunks(cardsToUse, shouldMergeLocal ? 'Deck local preservado' : 'Backup antigo recuperado', authedUser, token, {
+        markDeckInitialized: token === FIREBASE_CLOUD_TOKEN,
+        deckSource: shouldMergeLocal ? 'merged-local-deck' : 'legacy-backup'
+      })
       return
     }
 
@@ -2993,7 +3086,7 @@ export default function App() {
 
       try {
         const rememberedUserId = localStorage.getItem(LOCAL_LAST_USER_ID_KEY) || ''
-        const vaultKeys = rememberedUserId ? [localStateKeyForUser(rememberedUserId), LOCAL_STATE_KEY] : [LOCAL_STATE_KEY]
+        const vaultKeys = rememberedUserId ? [localStateKeyForUser(rememberedUserId)] : [LOCAL_STATE_KEY]
         let vault = null
         for (const key of vaultKeys) {
           const candidate = await readLocalVault(key).catch(() => null)
@@ -3014,11 +3107,11 @@ export default function App() {
         const savedLastAnswered = localStorage.getItem('mq_last_answered')
         const savedCurrentCardId = localStorage.getItem(CURRENT_CARD_KEY)
 
-        if (!Array.isArray(vault?.cards) && savedCards) nextCards = JSON.parse(savedCards)
-        if (!vault?.config && savedConfig) nextConfig = { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) }
-        if (!vault?.stats && savedStats) nextStats = safeStats(JSON.parse(savedStats))
-        if (!vault?.lastAnsweredId && savedLastAnswered) nextLastAnswered = savedLastAnswered
-        if (!vault?.currentCardId && savedCurrentCardId) nextCurrentCardId = savedCurrentCardId
+        if (!rememberedUserId && !Array.isArray(vault?.cards) && savedCards) nextCards = JSON.parse(savedCards)
+        if (!rememberedUserId && !vault?.config && savedConfig) nextConfig = { ...DEFAULT_CONFIG, ...JSON.parse(savedConfig) }
+        if (!rememberedUserId && !vault?.stats && savedStats) nextStats = safeStats(JSON.parse(savedStats))
+        if (!rememberedUserId && !vault?.lastAnsweredId && savedLastAnswered) nextLastAnswered = savedLastAnswered
+        if (!rememberedUserId && !vault?.currentCardId && savedCurrentCardId) nextCurrentCardId = savedCurrentCardId
         deleteLocalVaultKeysByPrefix('backup:').catch(err => console.warn('Limpeza de backups locais antigos adiada.', err))
       } catch {
         localStorage.removeItem('mq_stats')
@@ -4748,7 +4841,10 @@ export default function App() {
     const result = mergeImportedCards(baseCards, imported)
     setCards(result.merged)
     persistLocalStateNow(result.merged, stats)
-    syncCardsInChunks(result.createdCards, 'Cards novos importados')
+    syncCardsInChunks(result.createdCards, 'Cards novos importados', user, sessionToken, {
+      markDeckInitialized: sessionToken === FIREBASE_CLOUD_TOKEN,
+      deckSource: 'import'
+    })
     if (sessionToken === FIREBASE_CLOUD_TOKEN) {
       window.setTimeout(() => {
         ensureFirebaseDeckComplete('Conferencia automatica apos importacao').catch(err => {
