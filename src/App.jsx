@@ -1856,6 +1856,30 @@ function contentTimestamp(card) {
   )
 }
 
+function manualContentTimestamp(card) {
+  return timestampScore(card?.manualEditedAt)
+}
+
+function importedContentTimestamp(card) {
+  return Math.max(
+    timestampScore(card?.sourceUpdatedAt),
+    timestampScore(card?.importedAt),
+    timestampScore(card?.createdAt)
+  )
+}
+
+function chooseContentCard(first, second) {
+  const firstManual = manualContentTimestamp(first)
+  const secondManual = manualContentTimestamp(second)
+
+  if (firstManual || secondManual) {
+    if (firstManual && secondManual) return secondManual > firstManual ? second : first
+    return firstManual ? first : second
+  }
+
+  return importedContentTimestamp(second) > importedContentTimestamp(first) ? second : first
+}
+
 function cardIdentityKeys(card) {
   if (!card) return []
   const keys = new Set()
@@ -1870,7 +1894,7 @@ function cardIdentityKeys(card) {
 function chooseRicherCard(first, second) {
   if (!first) return second
   if (!second) return first
-  const contentPreferred = contentTimestamp(second) > contentTimestamp(first) ? second : first
+  const contentPreferred = chooseContentCard(first, second)
   const progressPreferred = cardProgressScore(second) > cardProgressScore(first) ? second : first
   const fallback = contentPreferred === first ? second : first
   return {
@@ -1927,12 +1951,23 @@ function mergeCardSources(...sources) {
 }
 
 function cloudDiffCards(cloudCards = [], localCards = []) {
-  const cloudById = new Map(cloudCards.filter(Boolean).map(card => [String(card.id || card.card_id || ''), card]))
+  const cloudByKey = new Map()
+  cloudCards.filter(Boolean).forEach(card => {
+    const keys = cardIdentityKeys(card)
+    if (card.card_id) keys.push(`id:${String(card.card_id)}`)
+    keys.forEach(key => cloudByKey.set(key, card))
+  })
   return localCards.filter(card => {
-    const id = String(card?.id || '')
-    if (!id) return false
-    const cloud = cloudById.get(id)
+    const keys = cardIdentityKeys(card)
+    if (!keys.length) return false
+    const cloud = keys.map(key => cloudByKey.get(key)).find(Boolean)
     if (!cloud) return true
+    const localManual = manualContentTimestamp(card)
+    const cloudManual = manualContentTimestamp(cloud)
+    if (localManual || cloudManual) {
+      if (localManual > cloudManual) return true
+      if (cloudManual > localManual) return cardProgressScore(card) > cardProgressScore(cloud)
+    }
     return contentTimestamp(card) > contentTimestamp(cloud) || cardProgressScore(card) > cardProgressScore(cloud)
   })
 }
@@ -2592,9 +2627,21 @@ export default function App() {
   const latestCardsRef = useRef(cards)
   const latestStatsRef = useRef(stats)
   const fullDeckSyncInFlightRef = useRef(false)
+  const activeSyncCountRef = useRef(0)
+  const [syncInFlight, setSyncInFlight] = useState(false)
   const answerSubmissionLockRef = useRef(null)
   const localStateKeyRef = useRef(LOCAL_STATE_KEY)
   const localSyncOutboxKeyRef = useRef(LOCAL_SYNC_OUTBOX_KEY)
+
+  function beginTrackedSync() {
+    activeSyncCountRef.current += 1
+    setSyncInFlight(true)
+  }
+
+  function endTrackedSync() {
+    activeSyncCountRef.current = Math.max(0, activeSyncCountRef.current - 1)
+    if (activeSyncCountRef.current === 0) setSyncInFlight(false)
+  }
 
   function setLocalStorageScope(authedUser) {
     const userId = cloudUserId(authedUser)
@@ -2754,6 +2801,7 @@ export default function App() {
     if (!authUser || !token || drainingSyncOutbox.current) return
 
     drainingSyncOutbox.current = true
+    beginTrackedSync()
     try {
       const outboxKey = localSyncOutboxKeyForUser(authUser)
       let queued = compactLocalSyncItems(await readLocalSyncOutbox(outboxKey))
@@ -2777,13 +2825,16 @@ export default function App() {
       if (queued.length) setSyncStatus(`${queued.length} cards aguardando a nuvem. Erro: ${firebaseErrorSummary(err)}`)
     } finally {
       drainingSyncOutbox.current = false
+      endTrackedSync()
     }
   }
 
   async function syncCardsInChunks(cardList, label = 'cards', authUser = user, token = sessionToken, options = {}) {
     if (!authUser || !token || !Array.isArray(cardList) || !cardList.length) return
     const cardsToSync = cardList.filter(Boolean)
+    if (!cardsToSync.length) return
     const chunkSize = 100
+    beginTrackedSync()
     try {
       let failedTotal = 0
       let syncedTotal = 0
@@ -2813,6 +2864,8 @@ export default function App() {
       })
       setSyncStatus(`Falha de sincronizacao: ${firebaseErrorSummary(err)}. Importacao ficou salva neste navegador; tentarei sincronizar depois.`)
       return { synced: 0, failed: cardsToSync.length, error: err }
+    } finally {
+      endTrackedSync()
     }
   }
 
@@ -2831,9 +2884,11 @@ export default function App() {
     fullDeckSyncInFlightRef.current = true
     try {
       let serverActive = 0
+      let serverCards = []
       try {
         const serverData = await getProfileThroughProxy(user, sessionToken, { server: true })
-        serverActive = activeCardCount(serverData?.cards || [])
+        serverCards = serverData?.cards || []
+        serverActive = activeCardCount(serverCards)
       } catch (err) {
         console.warn('Nao foi possivel conferir servidor antes do envio completo.', err)
       }
@@ -2850,8 +2905,17 @@ export default function App() {
 
       if (serverActive >= localActive) return
 
-      setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}. Sincronizando deck completo automaticamente...`)
-      const result = await syncCardsInChunks(localDeck, `Deck completo (${localActive} cards)`, user, sessionToken, {
+      const diffCards = cloudDiffCards(serverCards, localDeck)
+      if (!diffCards.length) {
+        await markFirebaseDeckInitialized(user, reason).catch(err => {
+          console.warn('Nao foi possivel marcar deck como conferido.', err)
+        })
+        setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}, mas nao encontrei diferencas locais novas.`)
+        return
+      }
+
+      setSyncStatus(`${reason}: servidor tem ${serverActive} de ${localActive}. Enviando ${diffCards.length} cards ausentes/atualizados...`)
+      const result = await syncCardsInChunks(diffCards, `${diffCards.length} cards ausentes/atualizados`, user, sessionToken, {
         markDeckInitialized: true,
         deckSource: reason
       })
@@ -2995,8 +3059,13 @@ export default function App() {
       const loadedCloudActive = activeCardCount(data?.cards || [])
       const canUseLatestToCompleteFirebase = token !== FIREBASE_CLOUD_TOKEN || canAutoCompleteCloudDeck(latestActive, loadedCloudActive)
       if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && hasCloudCards && latestActive > loadedCloudActive && canUseLatestToCompleteFirebase) {
-        setSyncStatus(`Firebase incompleto (${loadedCloudActive} de ${latestActive}). Enviando deck completo para a nuvem...`)
-        syncCardsInChunks(latestCards, `Deck completo (${latestActive} cards)`, authedUser, token, {
+        const diffCards = cloudDiffCards(data.cards, latestCards)
+        if (!diffCards.length) {
+          setSyncStatus(`Firebase carregou atrasado, mas nao encontrei diferencas locais novas.`)
+          return
+        }
+        setSyncStatus(`Firebase incompleto (${loadedCloudActive} de ${latestActive}). Enviando ${diffCards.length} cards ausentes/atualizados...`)
+        syncCardsInChunks(diffCards, `${diffCards.length} cards ausentes/atualizados`, authedUser, token, {
           markDeckInitialized: true,
           deckSource: 'complete-local-deck-after-late-cloud'
         })
@@ -3019,9 +3088,13 @@ export default function App() {
 
     if (shouldUploadLocalDeck) {
       const deckForCloud = shouldMergeLocal ? cardsToUse : seedCards
-      const count = activeCardCount(deckForCloud)
-      setSyncStatus(`Firebase incompleto (${cloudActive} de ${localActive}). Enviando deck completo para a nuvem...`)
-      syncCardsInChunks(deckForCloud, `Deck completo (${count} cards)`, authedUser, token, {
+      const diffCards = cloudDiffCards(data.cards, deckForCloud)
+      if (!diffCards.length) {
+        setSyncStatus(`Firebase incompleto (${cloudActive} de ${localActive}), mas nao encontrei diferencas locais novas.`)
+        return
+      }
+      setSyncStatus(`Firebase incompleto (${cloudActive} de ${localActive}). Enviando ${diffCards.length} cards ausentes/atualizados...`)
+      syncCardsInChunks(diffCards, `${diffCards.length} cards ausentes/atualizados`, authedUser, token, {
         markDeckInitialized: true,
         deckSource: 'complete-local-deck'
       })
@@ -3651,6 +3724,16 @@ export default function App() {
   }
 
   async function cloudLogout() {
+    if (user) {
+      const queued = await readLocalSyncOutbox(localSyncOutboxKeyForUser(user)).catch(() => [])
+      const hasPendingSync = syncInFlight || activeSyncCountRef.current > 0 || fullDeckSyncInFlightRef.current || drainingSyncOutbox.current || queued.length > 0
+      if (hasPendingSync) {
+        const detail = queued.length ? `${queued.length} pendencias locais` : 'envio em andamento'
+        setSyncStatus(`Aguarde a nuvem terminar antes de sair (${detail}). Assim evitamos perda de dados.`)
+        return
+      }
+    }
+
     if (user) {
       await firebaseSignOut(firebaseAuth).catch(err => console.warn('Nao foi possivel encerrar Firebase.', err))
       await supabase.auth.signOut().catch(err => console.warn('Nao foi possivel encerrar sessao remota.', err))
