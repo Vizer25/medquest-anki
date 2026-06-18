@@ -473,7 +473,10 @@ async function writeFirebaseCardPayload(userId, card) {
     updatedAt: new Date().toISOString(),
     manualEditedAt: card.manualEditedAt || null,
     dueAt: card.dueAt ?? null,
+    learningLevel: Number(card.learningLevel ?? card.reviewLevel ?? 0),
     reviewLevel: Number(card.reviewLevel || 0),
+    stageProgress: Number(card.stageProgress || 0),
+    lastReviewedAt: card.lastReviewedAt || null,
     correctCount: Number(card.correctCount || 0),
     reviewAttempts: Number(card.reviewAttempts || card.siteReps || 0),
     deleted: !!card.deleted,
@@ -1805,6 +1808,12 @@ function stableCardKey(card) {
   return normalize(`${card.noteId || ''} ${card.pergunta || ''} ${card.resposta || ''}`).slice(0, 240)
 }
 
+function cardNoteIdentityKey(card) {
+  if (!card?.noteId || card.isCloze) return ''
+  const frontKey = normalize(card.pergunta || card.htmlFront || card.html_front || '').slice(0, 160)
+  return frontKey ? `note:${String(card.noteId)}:${frontKey}` : ''
+}
+
 function importCardKey(card) {
   return card.importKey || card.originalImportKey || stableCardKey(card)
 }
@@ -1831,15 +1840,21 @@ function cardProgressScore(card) {
   if (!card || typeof card !== 'object') return 0
   const attempts = Number(card.reviewAttempts || card.siteReps || card.reps || 0)
   const correct = Number(card.correctCount || 0)
-  const level = Number(card.reviewLevel || 0)
-  const stage = Number(card.stageProgress || 0)
-  const editedAt = card.manualEditedAt ? new Date(card.manualEditedAt).getTime() : 0
-  const updatedAt = card.sourceUpdatedAt ? new Date(card.sourceUpdatedAt).getTime() : 0
-  const recency = Math.max(
-    Number.isFinite(editedAt) ? editedAt : 0,
-    Number.isFinite(updatedAt) ? updatedAt : 0
+  const level = learningLevel(card)
+  const historyDates = Array.isArray(card.learningHistory)
+    ? card.learningHistory.map(item => timestampScore(item?.date)).filter(Boolean)
+    : []
+  const lastProgressAt = Math.max(
+    timestampScore(card.lastReviewedAt),
+    timestampScore(card.fsrsLastReview),
+    ...historyDates,
+    0
   )
-  return attempts * 10000 + level * 1000 + stage * 100 + correct * 10 + Math.min(recency / 1000000000000, 9)
+
+  if (lastProgressAt) return lastProgressAt * 1000 + level
+
+  const stage = Number(card.stageProgress || 0)
+  return level * 1000000 + stage * 10000 + correct * 100 + attempts
 }
 
 function timestampScore(value) {
@@ -1880,10 +1895,26 @@ function chooseContentCard(first, second) {
   return importedContentTimestamp(second) > importedContentTimestamp(first) ? second : first
 }
 
+function chooseProgressCard(first, second) {
+  if (!first) return second
+  if (!second) return first
+
+  const sameStoredCard = first.id && second.id && String(first.id) === String(second.id)
+  if (!sameStoredCard) {
+    const firstLevel = learningLevel(first)
+    const secondLevel = learningLevel(second)
+    if (firstLevel !== secondLevel) return secondLevel > firstLevel ? second : first
+  }
+
+  return cardProgressScore(second) > cardProgressScore(first) ? second : first
+}
+
 function cardIdentityKeys(card) {
   if (!card) return []
   const keys = new Set()
   if (card.id) keys.add(`id:${String(card.id)}`)
+  const noteKey = cardNoteIdentityKey(card)
+  if (noteKey) keys.add(noteKey)
   const importKey = importCardKey(card)
   if (importKey) keys.add(`import:${importKey}`)
   const stableKey = stableCardKey(card)
@@ -1895,7 +1926,7 @@ function chooseRicherCard(first, second) {
   if (!first) return second
   if (!second) return first
   const contentPreferred = chooseContentCard(first, second)
-  const progressPreferred = cardProgressScore(second) > cardProgressScore(first) ? second : first
+  const progressPreferred = chooseProgressCard(first, second)
   const fallback = contentPreferred === first ? second : first
   return {
     ...fallback,
@@ -2014,8 +2045,7 @@ function mergeImportedCards(oldCards, importedCards) {
   const oldById = new Map(oldCards.map(c => [String(c.id), c]))
   const oldByKey = new Map()
   oldCards.forEach(card => {
-    oldByKey.set(stableCardKey(card), card)
-    if (card.importKey || card.originalImportKey) oldByKey.set(importCardKey(card), card)
+    cardIdentityKeys(card).forEach(key => oldByKey.set(key, card))
   })
   let added = 0
   let updated = 0
@@ -2030,7 +2060,7 @@ function mergeImportedCards(oldCards, importedCards) {
     const nextCard = { ...newCard, importKey: importCardKey(newCard), originalImportKey: importCardKey(newCard), importedAt }
     const idKey = String(newCard.id)
     const contentKey = importCardKey(nextCard)
-    const existing = oldById.get(idKey) || oldByKey.get(contentKey)
+    const existing = oldById.get(idKey) || cardIdentityKeys(nextCard).map(key => oldByKey.get(key)).find(Boolean) || oldByKey.get(`import:${contentKey}`)
 
     if (existing) {
       ignoredExisting += 1
@@ -2965,7 +2995,8 @@ export default function App() {
 
     const hasCloudCards = Array.isArray(data?.cards) && data.cards.length > 0
     const hasCloudStats = data?.stats && typeof data.stats === 'object'
-    const loadedCloudActive = activeCardCount(data?.cards || [])
+    const cloudCards = hasCloudCards ? mergeCardSources(data.cards) : []
+    const loadedCloudActive = activeCardCount(cloudCards)
     const hasTrustedFirebaseDeck = token !== FIREBASE_CLOUD_TOKEN ||
       !hasCloudCards ||
       Boolean(data?.deckInitializedAt) ||
@@ -3029,7 +3060,7 @@ export default function App() {
       return
     }
 
-    let cardsToUse = hasCloudCards ? data.cards : seedCards
+    let cardsToUse = hasCloudCards ? cloudCards : seedCards
     const localActive = activeCardCount(seedCards)
     const cloudActive = activeCardCount(cardsToUse)
     const hasLocalCards = hasRealLocalDeck(seedCards)
@@ -3043,7 +3074,7 @@ export default function App() {
     }
 
     if (shouldMergeLocal) {
-      cardsToUse = mergeCardSources(data.cards, seedCards)
+      cardsToUse = mergeCardSources(cloudCards, seedCards)
       setSyncStatus(`${token === FIREBASE_CLOUD_TOKEN ? 'Firebase' : 'Nuvem'} sincronizado. Deck local preservado.`)
     }
 
@@ -3057,10 +3088,10 @@ export default function App() {
       const latestStats = latestStatsRef.current || seedStats
       const latestHasRealDeck = hasRealLocalDeck(latestCards)
       const latestActive = activeCardCount(latestCards)
-      const loadedCloudActive = activeCardCount(data?.cards || [])
+      const loadedCloudActive = activeCardCount(cloudCards)
       const canUseLatestToCompleteFirebase = token !== FIREBASE_CLOUD_TOKEN || canAutoCompleteCloudDeck(latestActive, loadedCloudActive)
       if (token === FIREBASE_CLOUD_TOKEN && latestHasRealDeck && hasCloudCards && latestActive > loadedCloudActive && canUseLatestToCompleteFirebase) {
-        const diffCards = cloudDiffCards(data.cards, latestCards)
+        const diffCards = cloudDiffCards(cloudCards, latestCards)
         if (!diffCards.length) {
           setSyncStatus(`Firebase carregou atrasado, mas nao encontrei diferencas locais novas.`)
           return
@@ -3081,7 +3112,7 @@ export default function App() {
         setSyncStatus(`Firebase carregou ${loadedCloudActive} cards desta conta. Nao completei com deck local de outro login.`)
         return
       }
-      const diffCards = hasCloudCards ? cloudDiffCards(data.cards, latestCards) : (latestHasRealDeck ? latestCards : [])
+      const diffCards = hasCloudCards ? cloudDiffCards(cloudCards, latestCards) : (latestHasRealDeck ? latestCards : [])
       if (diffCards.length) syncCardsInChunks(diffCards, `${diffCards.length} alteracoes locais recentes`, authedUser, token)
       if (hasCloudStats) saveProfileThroughProxy(authedUser, token, undefined, mergeStatsSources(data.stats, latestStats)).catch(err => console.warn('Stats recentes adiados.', err))
       return
@@ -3089,7 +3120,7 @@ export default function App() {
 
     if (shouldUploadLocalDeck) {
       const deckForCloud = shouldMergeLocal ? cardsToUse : seedCards
-      const diffCards = cloudDiffCards(data.cards, deckForCloud)
+      const diffCards = cloudDiffCards(cloudCards, deckForCloud)
       if (!diffCards.length) {
         setSyncStatus(`Firebase incompleto (${cloudActive} de ${localActive}), mas nao encontrei diferencas locais novas.`)
         return
@@ -3109,7 +3140,7 @@ export default function App() {
 
     if (data?.migrationNeeded && hasCloudCards) {
       if (!localDeckIsLarger) {
-        setSyncStatus(`Recuperando backup antigo: ${data.legacyCardCount || data.cards.length} cards encontrados. Sincronizando em lotes...`)
+        setSyncStatus(`Recuperando backup antigo: ${data.legacyCardCount || cloudCards.length} cards encontrados. Sincronizando em lotes...`)
       }
       syncCardsInChunks(cardsToUse, shouldMergeLocal ? 'Deck local preservado' : 'Backup antigo recuperado', authedUser, token, {
         markDeckInitialized: token === FIREBASE_CLOUD_TOKEN,
@@ -3119,7 +3150,7 @@ export default function App() {
     }
 
     if (shouldMergeLocal) {
-      const diffCards = cloudDiffCards(data.cards, seedCards)
+      const diffCards = cloudDiffCards(cloudCards, seedCards)
       if (diffCards.length) {
         syncCardsInChunks(diffCards, `${diffCards.length} diferencas locais`, authedUser, token)
       }
