@@ -1220,6 +1220,31 @@ function stripHtml(text) {
   return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim()
 }
 
+function normalizeTagToken(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[,\s]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function tagListFromString(value) {
+  const seen = new Set()
+  return String(value || '')
+    .split(/[\s,]+/)
+    .map(normalizeTagToken)
+    .filter(Boolean)
+    .filter(tag => {
+      const key = normalize(tag)
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+function tagListToString(tags) {
+  return tagListFromString((tags || []).join(' ')).join(' ')
+}
+
 function hasHtmlMarkup(value) {
   return /<\/?[a-z][\s\S]*>/i.test(String(value || ''))
 }
@@ -2367,6 +2392,123 @@ function cardBackHtml(card) {
   return richestVisibleHtml(card?.htmlBack, card?.html_back, card?.backHtml, card?.resposta, card?.answer, card?.back, card?.verso)
 }
 
+function TagEditor({ value, onChange, suggestions = [], placeholder = 'Digite para buscar tags...' }) {
+  const [draft, setDraft] = useState('')
+  const [focused, setFocused] = useState(false)
+  const inputRef = useRef(null)
+  const tags = useMemo(() => tagListFromString(value), [value])
+  const selectedKeys = useMemo(() => new Set(tags.map(tag => normalize(tag))), [tags])
+  const draftToken = normalizeTagToken(draft)
+  const draftKey = normalize(draftToken)
+  const filteredSuggestions = useMemo(() => {
+    const unique = tagListFromString(suggestions.join(' '))
+      .filter(tag => !selectedKeys.has(normalize(tag)))
+    const query = normalize(draft)
+    const matches = query
+      ? unique.filter(tag => normalize(tag).includes(query))
+      : unique
+    return matches
+      .sort((a, b) => {
+        const aNorm = normalize(a)
+        const bNorm = normalize(b)
+        const aStarts = query && aNorm.startsWith(query)
+        const bStarts = query && bNorm.startsWith(query)
+        if (aStarts !== bStarts) return aStarts ? -1 : 1
+        return a.localeCompare(b, 'pt-BR')
+      })
+      .slice(0, 12)
+  }, [draft, suggestions, selectedKeys])
+  const canCreateDraft = Boolean(draftToken && !selectedKeys.has(draftKey))
+  const showSuggestions = focused && (filteredSuggestions.length > 0 || canCreateDraft)
+
+  function updateTags(nextTags) {
+    onChange(tagListToString(nextTags))
+  }
+
+  function addTag(tag) {
+    const nextTag = normalizeTagToken(tag)
+    const nextKey = normalize(nextTag)
+    if (!nextTag || selectedKeys.has(nextKey)) {
+      setDraft('')
+      return
+    }
+    updateTags([...tags, nextTag])
+    setDraft('')
+  }
+
+  function commitDraft() {
+    if (!draftToken) return
+    addTag(filteredSuggestions[0] || draftToken)
+  }
+
+  return (
+    <div className="tag-editor">
+      <div className={`tag-editor-field ${focused ? 'focused' : ''}`} onClick={() => inputRef.current?.focus()}>
+        {tags.map(tag => (
+          <span className="tag-pill" key={tag}>
+            {tag}
+            <button
+              type="button"
+              aria-label={`Remover tag ${tag}`}
+              onClick={event => {
+                event.stopPropagation()
+                updateTags(tags.filter(item => item !== tag))
+              }}
+            >
+              x
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          className="tag-editor-input"
+          value={draft}
+          onChange={event => setDraft(event.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => window.setTimeout(() => setFocused(false), 120)}
+          onKeyDown={event => {
+            if (['Enter', 'Tab', ','].includes(event.key)) {
+              if (!draft.trim()) return
+              event.preventDefault()
+              commitDraft()
+            }
+          }}
+          placeholder={tags.length ? '' : placeholder}
+        />
+      </div>
+      {showSuggestions && (
+        <div className="tag-suggestions">
+          {filteredSuggestions.map(tag => (
+            <button
+              type="button"
+              key={tag}
+              onMouseDown={event => {
+                event.preventDefault()
+                addTag(tag)
+              }}
+            >
+              {tag}
+            </button>
+          ))}
+          {canCreateDraft && !filteredSuggestions.some(tag => normalize(tag) === draftKey) && (
+            <button
+              type="button"
+              className="tag-suggestion-create"
+              onMouseDown={event => {
+                event.preventDefault()
+                addTag(draftToken)
+              }}
+            >
+              Criar tag "{draftToken}"
+            </button>
+          )}
+        </div>
+      )}
+      <small className="tag-editor-help">Escolha uma sugestao ou pressione Enter para criar uma tag nova.</small>
+    </div>
+  )
+}
+
 function HtmlContent({ html, className, compactParagraphs = false }) {
   const contentRef = useRef(null)
   const safeHtml = useMemo(() => (
@@ -2633,6 +2775,7 @@ export default function App() {
   const [editTags, setEditTags] = useState('')
   const editFrontRef = useRef('')
   const editBackRef = useRef('')
+  const libraryCardRefs = useRef(new Map())
   const [tab, setTab] = useState('study')
   const [siteSeconds, setSiteSeconds] = useState(0)
   const [cardSeconds, setCardSeconds] = useState(0)
@@ -4353,9 +4496,20 @@ export default function App() {
     setEditing(true)
   }
 
+  function scrollLibraryCardIntoView(cardId) {
+    if (!cardId) return
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const node = libraryCardRefs.current.get(cardId)
+        if (node) node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' })
+      })
+    })
+  }
+
   function saveEdit() {
     const editingCardId = libraryEditingId || current?.id
     if (!editingCardId) return
+    const shouldRestoreLibraryScroll = Boolean(libraryEditingId)
     const frontHtmlToSave = normalizeRichHtmlSpacing(editFrontRef.current || editFront, '1.35', '4px')
     const backHtmlToSave = normalizeRichHtmlSpacing(editBackRef.current || editBack, '1.35', '4px')
     const pergunta = stripHtml(frontHtmlToSave)
@@ -4409,6 +4563,7 @@ export default function App() {
     setEditing(false)
     setLibraryEditingId(null)
     setEditTags('')
+    if (shouldRestoreLibraryScroll) scrollLibraryCardIntoView(editingCardId)
   }
 
   function studySingleCard(cardId) {
@@ -4628,11 +4783,7 @@ export default function App() {
   }
 
   function sanitizeAnkiTags(value) {
-    return String(value || '')
-      .split(/\s+/)
-      .map(tag => tag.trim().replace(/\s+/g, '_'))
-      .filter(Boolean)
-      .join(' ')
+    return tagListToString(tagListFromString(value))
   }
 
   function ankiFieldHtml(value) {
@@ -5189,11 +5340,11 @@ export default function App() {
                       <label>Resposta/gabarito</label>
                       <RichTextEditor value={editBack} onChange={updateEditBack} />
                       <label>Tags</label>
-                      <input
-                        className="tag-edit-input"
+                      <TagEditor
                         value={editTags}
-                        onChange={e => setEditTags(e.target.value)}
-                        placeholder="Ex.: hepato unicamp usp"
+                        onChange={setEditTags}
+                        suggestions={allTags}
+                        placeholder="Buscar ou criar tag"
                       />
                       <div className="actions">
                         <button onClick={saveEdit}>Salvar edição</button>
@@ -5313,8 +5464,16 @@ export default function App() {
               const stage = reviewStageDetails(v)
               const reviewSummary = reviewCountSummary(v, reviewMetricsByCard.get(v.id))
               const reps = reviewSummary.attempts
+              const answerPreviewHtml = richEditorInitialHtml(cardBackHtml(v) || v.resposta || '')
               return (
-                <div className={`mini ${c.suspended ? 'suspended' : ''}`} key={c.id}>
+                <div
+                  className={`mini ${c.suspended ? 'suspended' : ''}`}
+                  key={c.id}
+                  ref={node => {
+                    if (node) libraryCardRefs.current.set(c.id, node)
+                    else libraryCardRefs.current.delete(c.id)
+                  }}
+                >
                   <div className="library-card-top">
                     <span className={`review-stage-chip ${stage.className}`}>{stage.label}</span>
                     <span className="repeat-chip">{reps} repetições</span>
@@ -5324,7 +5483,10 @@ export default function App() {
                   {shouldShowLibraryFrontPreview(v) && (
                     <HtmlContent className="library-front-preview" html={v.htmlFront} />
                   )}
-                  <p><b>Resposta:</b> {v.resposta}</p>
+                  <div className="library-answer-preview">
+                    <b>Resposta:</b>
+                    <HtmlContent className="library-answer-html" html={answerPreviewHtml} compactParagraphs />
+                  </div>
                   {libraryEditingId === c.id && editing && (
                     <div className="edit-box">
                       <h3>Editar flashcard</h3>
@@ -5333,11 +5495,11 @@ export default function App() {
                       <label>Resposta/gabarito</label>
                       <RichTextEditor value={editBack} onChange={updateEditBack} />
                       <label>Tags</label>
-                      <input
-                        className="tag-edit-input"
+                      <TagEditor
                         value={editTags}
-                        onChange={e => setEditTags(e.target.value)}
-                        placeholder="Ex.: hepato unicamp usp"
+                        onChange={setEditTags}
+                        suggestions={allTags}
+                        placeholder="Buscar ou criar tag"
                       />
                       <div className="actions">
                         <button onClick={saveEdit}>Salvar edição</button>
