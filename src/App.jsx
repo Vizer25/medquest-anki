@@ -126,6 +126,7 @@ const LEARNING_STEPS = [
 ]
 const MASTERED_LEVEL = LEARNING_STEPS.length - 1
 const NEW_REVIEW_RATIO = 1
+const LIBRARY_PAGE_SIZE = 200
 
 function normalizedRetention(value = DEFAULT_FSRS_RETENTION) {
   const parsed = Number(value)
@@ -2640,7 +2641,7 @@ export default function App() {
   const [cardStageFilter, setCardStageFilter] = useState('all')
   const [librarySortMode, setLibrarySortMode] = useState('difficulty')
   const [libraryTagFilter, setLibraryTagFilter] = useState('')
-  const [libraryVisibleCount, setLibraryVisibleCount] = useState(80)
+  const [libraryVisibleCount, setLibraryVisibleCount] = useState(LIBRARY_PAGE_SIZE)
   const [studyTag, setStudyTag] = useState('')
   const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
@@ -3444,7 +3445,7 @@ export default function App() {
   const visibleFilteredCards = filteredCards.slice(0, libraryVisibleCount)
 
   useEffect(() => {
-    setLibraryVisibleCount(80)
+    setLibraryVisibleCount(LIBRARY_PAGE_SIZE)
   }, [searchTerm, cardStageFilter, libraryTagFilter, librarySortMode])
 
   const statsPanel = (
@@ -5394,8 +5395,8 @@ export default function App() {
             })}
           </div>
           {visibleFilteredCards.length < filteredCards.length && (
-            <button type="button" className="secondary load-more-button" onClick={() => setLibraryVisibleCount(count => count + 80)}>
-              Mostrar mais {Math.min(80, filteredCards.length - visibleFilteredCards.length)}
+            <button type="button" className="secondary load-more-button" onClick={() => setLibraryVisibleCount(count => count + LIBRARY_PAGE_SIZE)}>
+              Mostrar mais {Math.min(LIBRARY_PAGE_SIZE, filteredCards.length - visibleFilteredCards.length)}
             </button>
           )}
         </section>
