@@ -2599,6 +2599,7 @@ export default function App() {
   const [libraryEditingId, setLibraryEditingId] = useState(null)
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
+  const [editTags, setEditTags] = useState('')
   const editFrontRef = useRef('')
   const editBackRef = useRef('')
   const [tab, setTab] = useState('study')
@@ -4316,6 +4317,7 @@ export default function App() {
     setLibraryEditingId(null)
     updateEditFront(richEditorInitialHtml(v.htmlFront || v.pergunta || ''))
     updateEditBack(richEditorInitialHtml(backSource))
+    setEditTags(sanitizeAnkiTags(v.tags || current.tags || ''))
     setEditing(true)
   }
 
@@ -4326,6 +4328,7 @@ export default function App() {
     const backHtmlToSave = normalizeRichHtmlSpacing(editBackRef.current || editBack, '1.35', '4px')
     const pergunta = stripHtml(frontHtmlToSave)
     const resposta = stripHtml(backHtmlToSave)
+    const tags = sanitizeAnkiTags(editTags)
     const editedAt = new Date().toISOString()
     let updatedCard = null
     const nextCardsForVault = (latestCardsRef.current || cards).map(c => {
@@ -4342,6 +4345,7 @@ export default function App() {
         html_back: backHtmlToSave,
         frontHtml: frontHtmlToSave,
         backHtml: backHtmlToSave,
+        tags,
         manualEditedAt: editedAt,
         sourceUpdatedAt: editedAt,
         palavras: normalize(resposta).split(' ').filter(w => w.length > 4).slice(0, 10)
@@ -4372,6 +4376,7 @@ export default function App() {
     }
     setEditing(false)
     setLibraryEditingId(null)
+    setEditTags('')
   }
 
   function studySingleCard(cardId) {
@@ -4393,6 +4398,7 @@ export default function App() {
     setPendingGrade(null)
     setEditing(false)
     setLibraryEditingId(null)
+    setEditTags('')
     setTab('study')
   }
 
@@ -4413,6 +4419,7 @@ export default function App() {
     setLibraryEditingId(cardId)
     updateEditFront(richEditorInitialHtml(v.htmlFront || v.pergunta || ''))
     updateEditBack(richEditorInitialHtml(backSource))
+    setEditTags(sanitizeAnkiTags(v.tags || card.tags || ''))
     setEditing(true)
   }
 
@@ -5149,9 +5156,16 @@ export default function App() {
                       <RichTextEditor value={editFront} onChange={updateEditFront} />
                       <label>Resposta/gabarito</label>
                       <RichTextEditor value={editBack} onChange={updateEditBack} />
+                      <label>Tags</label>
+                      <input
+                        className="tag-edit-input"
+                        value={editTags}
+                        onChange={e => setEditTags(e.target.value)}
+                        placeholder="Ex.: hepato unicamp usp"
+                      />
                       <div className="actions">
                         <button onClick={saveEdit}>Salvar edição</button>
-                        <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null) }}>Cancelar</button>
+                        <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null); setEditTags('') }}>Cancelar</button>
                       </div>
                     </div>
                   )}
@@ -5286,9 +5300,16 @@ export default function App() {
                       <RichTextEditor value={editFront} onChange={updateEditFront} />
                       <label>Resposta/gabarito</label>
                       <RichTextEditor value={editBack} onChange={updateEditBack} />
+                      <label>Tags</label>
+                      <input
+                        className="tag-edit-input"
+                        value={editTags}
+                        onChange={e => setEditTags(e.target.value)}
+                        placeholder="Ex.: hepato unicamp usp"
+                      />
                       <div className="actions">
                         <button onClick={saveEdit}>Salvar edição</button>
-                        <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null) }}>Cancelar</button>
+                        <button className="secondary" onClick={() => { setEditing(false); setLibraryEditingId(null); setEditTags('') }}>Cancelar</button>
                       </div>
                     </div>
                   )}
