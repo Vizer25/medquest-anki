@@ -126,7 +126,7 @@ const LEARNING_STEPS = [
 ]
 const MASTERED_LEVEL = LEARNING_STEPS.length - 1
 const NEW_REVIEW_RATIO = 1
-const LIBRARY_PAGE_SIZE = 200
+const LIBRARY_PAGE_SIZE = 500
 
 function normalizedRetention(value = DEFAULT_FSRS_RETENTION) {
   const parsed = Number(value)
@@ -2557,7 +2557,6 @@ function RichTextEditor({ value, onChange, lineHeight = '1.35', paragraphGap = '
   }, [value, lineHeight, paragraphGap])
 
   function emitChange() {
-    normalizeEditorSpacing(editorRef.current, lineHeight, paragraphGap)
     const html = editorRef.current?.innerHTML || ''
     lastHtmlRef.current = html
     onChange(html)
@@ -2633,13 +2632,6 @@ function RichTextEditor({ value, onChange, lineHeight = '1.35', paragraphGap = '
   }
 
   function handleEditorKeyDown(event) {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      document.execCommand('insertParagraph')
-      emitChange()
-      saveSelection()
-      return
-    }
     if (!(event.ctrlKey || event.metaKey)) return
     if (event.key === '.' || event.key === '>') {
       event.preventDefault()
@@ -2776,6 +2768,7 @@ export default function App() {
   const editFrontRef = useRef('')
   const editBackRef = useRef('')
   const libraryCardRefs = useRef(new Map())
+  const librarySectionRef = useRef(null)
   const [tab, setTab] = useState('study')
   const [siteSeconds, setSiteSeconds] = useState(0)
   const [cardSeconds, setCardSeconds] = useState(0)
@@ -2784,7 +2777,7 @@ export default function App() {
   const [cardStageFilter, setCardStageFilter] = useState('all')
   const [librarySortMode, setLibrarySortMode] = useState('difficulty')
   const [libraryTagFilter, setLibraryTagFilter] = useState('')
-  const [libraryVisibleCount, setLibraryVisibleCount] = useState(LIBRARY_PAGE_SIZE)
+  const [libraryPageIndex, setLibraryPageIndex] = useState(0)
   const [studyTag, setStudyTag] = useState('')
   const [focusedCardIds, setFocusedCardIds] = useState([])
   const [newFront, setNewFront] = useState('')
@@ -3585,11 +3578,27 @@ export default function App() {
         return sortCardsByDifficulty(a, b, reviewMetricsByCard)
       })
   }, [libraryBaseCards, cardStageFilter, librarySortMode, reviewMetricsByCard])
-  const visibleFilteredCards = filteredCards.slice(0, libraryVisibleCount)
+  const libraryPageCount = Math.max(1, Math.ceil(filteredCards.length / LIBRARY_PAGE_SIZE))
+  const safeLibraryPageIndex = Math.min(libraryPageIndex, libraryPageCount - 1)
+  const libraryPageStart = safeLibraryPageIndex * LIBRARY_PAGE_SIZE
+  const libraryPageEnd = Math.min(filteredCards.length, libraryPageStart + LIBRARY_PAGE_SIZE)
+  const visibleFilteredCards = filteredCards.slice(libraryPageStart, libraryPageEnd)
 
   useEffect(() => {
-    setLibraryVisibleCount(LIBRARY_PAGE_SIZE)
+    setLibraryPageIndex(0)
   }, [searchTerm, cardStageFilter, libraryTagFilter, librarySortMode])
+
+  useEffect(() => {
+    setLibraryPageIndex(index => Math.min(index, Math.max(0, libraryPageCount - 1)))
+  }, [libraryPageCount])
+
+  function goToLibraryPage(nextIndex) {
+    const boundedIndex = Math.min(Math.max(0, nextIndex), Math.max(0, libraryPageCount - 1))
+    setLibraryPageIndex(boundedIndex)
+    window.requestAnimationFrame(() => {
+      librarySectionRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' })
+    })
+  }
 
   const statsPanel = (
     <>
@@ -5397,7 +5406,7 @@ export default function App() {
       )}
 
       {tab === 'cards' && (
-        <section className="card">
+        <section className="card" ref={librarySectionRef}>
           <h2>Biblioteca de flashcards</h2>
           <input
             value={searchTerm}
@@ -5456,7 +5465,7 @@ export default function App() {
             </button>
           </div>
           <p className="hint">
-            {filteredCards.length} de {activeCards.length} flashcards encontrados. Mostrando {visibleFilteredCards.length}. Ordenacao: {librarySortMode === 'recent' ? 'ultimos adicionados' : 'mais repetidos'}. Suspensos: {suspendedCount}. Excluidos preservados: {deletedCount}.
+            {filteredCards.length} de {activeCards.length} flashcards encontrados. Mostrando {filteredCards.length ? `${libraryPageStart + 1}-${libraryPageEnd}` : '0'}. Ordenacao: {librarySortMode === 'recent' ? 'ultimos adicionados' : 'mais repetidos'}. Suspensos: {suspendedCount}. Excluidos preservados: {deletedCount}.
           </p>
           <div className="grid-cards">
             {visibleFilteredCards.map((c, i) => {
@@ -5479,7 +5488,7 @@ export default function App() {
                     <span className="repeat-chip">{reps} repetições</span>
                     {c.suspended && <span className="status-chip">Suspenso</span>}
                   </div>
-                  <b>{i+1}. {v.pergunta}</b>
+                  <b>{libraryPageStart + i + 1}. {v.pergunta}</b>
                   {shouldShowLibraryFrontPreview(v) && (
                     <HtmlContent className="library-front-preview" html={v.htmlFront} />
                   )}
@@ -5556,10 +5565,26 @@ export default function App() {
               )
             })}
           </div>
-          {visibleFilteredCards.length < filteredCards.length && (
-            <button type="button" className="secondary load-more-button" onClick={() => setLibraryVisibleCount(count => count + LIBRARY_PAGE_SIZE)}>
-              Mostrar mais {Math.min(LIBRARY_PAGE_SIZE, filteredCards.length - visibleFilteredCards.length)}
-            </button>
+          {filteredCards.length > LIBRARY_PAGE_SIZE && (
+            <div className="library-pagination">
+              <button
+                type="button"
+                className="secondary"
+                disabled={safeLibraryPageIndex === 0}
+                onClick={() => goToLibraryPage(safeLibraryPageIndex - 1)}
+              >
+                Mostrar 500 anteriores
+              </button>
+              <span>Pagina {safeLibraryPageIndex + 1} de {libraryPageCount}</span>
+              <button
+                type="button"
+                className="secondary load-more-button"
+                disabled={safeLibraryPageIndex >= libraryPageCount - 1}
+                onClick={() => goToLibraryPage(safeLibraryPageIndex + 1)}
+              >
+                Mostrar proximos {Math.min(LIBRARY_PAGE_SIZE, filteredCards.length - libraryPageEnd)}
+              </button>
+            </div>
           )}
         </section>
       )}
