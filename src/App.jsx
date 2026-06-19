@@ -933,24 +933,46 @@ function buildCardReviewMetrics(history = []) {
   return (history || []).reduce((map, item) => {
     if (!item?.id) return map
     const current = map.get(item.id) || { attempts: 0, corrects: 0, wrongs: 0 }
+    const currentTime = optionalTimestamp(item.date)
+    const duplicateClick = current.lastDate &&
+      currentTime &&
+      Math.abs(currentTime - optionalTimestamp(current.lastDate)) < 30000 &&
+      current.lastGrade === item.grade &&
+      current.lastPercent === item.percent
+    if (duplicateClick) return map
     current.attempts += 1
     if (item.correct) current.corrects += 1
     else current.wrongs += 1
     current.lastDate = item.date || current.lastDate
+    current.lastGrade = item.grade
+    current.lastPercent = item.percent
     map.set(item.id, current)
     return map
   }, new Map())
 }
 
+function learningHistorySummary(card) {
+  const history = Array.isArray(card?.learningHistory) ? card.learningHistory : []
+  if (!history.length) return null
+
+  return history.reduce((summary, item) => {
+    const rating = item?.rating || item?.grade || ''
+    const isCorrect = rating === 'good' || rating === 'easy'
+    summary.attempts += 1
+    if (isCorrect) summary.corrects += 1
+    else summary.wrongs += 1
+    return summary
+  }, { attempts: 0, corrects: 0, wrongs: 0 })
+}
+
 function reviewCountSummary(card, metrics = null) {
-  const attempts = Math.max(
-    0,
-    Number(card?.reviewAttempts || 0),
-    Number(card?.siteReps || 0),
-    Number(metrics?.attempts || 0)
-  )
-  const corrects = Math.max(0, Number(card?.reviewCorrect || 0), Number(metrics?.corrects || 0))
-  const wrongs = Math.max(0, Number(card?.reviewWrong || 0), Number(metrics?.wrongs || 0))
+  const metricAttempts = Number(metrics?.attempts || 0)
+  const metricCorrects = Number(metrics?.corrects || 0)
+  const metricWrongs = Number(metrics?.wrongs || 0)
+  const learningSummary = learningHistorySummary(card)
+  const attempts = metricAttempts > 0 ? metricAttempts : (learningSummary?.attempts || 0)
+  const corrects = metricAttempts > 0 ? metricCorrects : (learningSummary?.corrects || 0)
+  const wrongs = metricAttempts > 0 ? metricWrongs : (learningSummary?.wrongs || 0)
 
   return { attempts, corrects, wrongs }
 }
@@ -1119,9 +1141,6 @@ function sortReviewGroup(cards, now = Date.now()) {
     const aTime = dueTimestamp(a, now)
     const bTime = dueTimestamp(b, now)
     if (aTime !== bTime) return aTime - bTime
-
-    const repsDiff = totalSiteReps(b) - totalSiteReps(a)
-    if (repsDiff) return repsDiff
 
     return hashString(`${a.id}-${daySeed}`) - hashString(`${b.id}-${daySeed}`)
   })
@@ -2249,17 +2268,17 @@ function hideBrokenImages(container) {
 
 function compactRepeatedBreaks(container) {
   if (!container) return
-  let previousBreak = false
+  let breakRun = 0
   Array.from(container.childNodes).forEach(node => {
     const isWhitespace = node.nodeType === Node.TEXT_NODE && !node.textContent.trim()
     const isBreak = node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR'
     if (isWhitespace) return
     if (isBreak) {
-      if (previousBreak) node.remove()
-      previousBreak = true
+      breakRun += 1
+      if (breakRun > 2) node.remove()
       return
     }
-    previousBreak = false
+    breakRun = 0
   })
 }
 
@@ -2281,8 +2300,13 @@ function wrapLooseLineBreaks(container) {
   let lineNodes = []
   const blockTags = new Set(['P', 'DIV', 'LI', 'UL', 'OL', 'TABLE', 'IMG', 'VIDEO', 'AUDIO', 'IFRAME', 'SVG'])
 
-  const flushLine = () => {
+  const flushLine = (preserveEmpty = false) => {
     if (!lineNodes.some(hasVisibleNodeContent)) {
+      if (preserveEmpty && nextChildren.length) {
+        const line = document.createElement('div')
+        line.appendChild(document.createElement('br'))
+        nextChildren.push(line)
+      }
       lineNodes = []
       return
     }
@@ -2294,7 +2318,7 @@ function wrapLooseLineBreaks(container) {
 
   childNodes.forEach(node => {
     if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR') {
-      flushLine()
+      flushLine(true)
       return
     }
     if (node.nodeType === Node.ELEMENT_NODE && blockTags.has(node.tagName)) {
@@ -2320,8 +2344,10 @@ function normalizeEditorSpacing(container, lineHeight = '1.35', paragraphGap = '
     const hasMedia = Boolean(block.querySelector('img,video,audio,table,ul,ol,iframe,svg'))
     const text = String(block.textContent || '').replace(/\u00a0/g, '').trim()
     if (!text && !hasMedia) {
-      block.remove()
-      return
+      if (!block.querySelector('br')) block.appendChild(document.createElement('br'))
+      block.style.minHeight = `calc(${lineHeight} * 1em)`
+    } else {
+      block.style.removeProperty('min-height')
     }
     block.style.marginTop = '0'
     block.style.margin = `0 0 ${paragraphGap}`
@@ -2382,6 +2408,12 @@ function richEditorInitialHtml(value) {
   if (!source) return ''
   if (hasHtmlMarkup(source)) return source
   return escapeHtml(source).replace(/\r?\n/g, '<br>')
+}
+
+function richDisplayHtml(value) {
+  const source = removeImageFallbackText(value)
+  if (!source) return ''
+  return hasHtmlMarkup(source) ? source : richEditorInitialHtml(source)
 }
 
 function cardFrontHtml(card) {
@@ -2511,11 +2543,12 @@ function TagEditor({ value, onChange, suggestions = [], placeholder = 'Digite pa
 
 function HtmlContent({ html, className, compactParagraphs = false }) {
   const contentRef = useRef(null)
-  const safeHtml = useMemo(() => (
-    compactParagraphs
-      ? normalizeRichHtmlSpacing(html, '1.35', '4px')
-      : removeImageFallbackText(html)
-  ), [html, compactParagraphs])
+  const safeHtml = useMemo(() => {
+    const displayHtml = compactParagraphs ? richDisplayHtml(html) : removeImageFallbackText(html)
+    return compactParagraphs
+      ? normalizeRichHtmlSpacing(displayHtml, '1.35', '4px')
+      : displayHtml
+  }, [html, compactParagraphs])
 
   useEffect(() => {
     if (compactParagraphs) normalizeEditorSpacing(contentRef.current, '1.35', '4px')
@@ -3458,9 +3491,13 @@ export default function App() {
   const current = answeredCurrent || lockedCurrent || queuedCurrent
   const currentQueueIndex = current ? dueCards.findIndex(card => card.id === current.id) : -1
   const currentQueueNumber = currentQueueIndex >= 0 ? currentQueueIndex + 1 : Math.min(index + 1, dueCards.length)
+  const currentDeckIndex = current ? activeCards.findIndex(card => card.id === current.id) : -1
+  const currentPositionLabel = focusedCardIds.length && currentDeckIndex >= 0
+    ? `Card ${currentDeckIndex + 1} de ${activeCards.length}`
+    : `Card vencido ${currentQueueNumber} de ${dueCards.length}`
   const currentView = current ? getCardView(current) : null
   const feedbackForCurrent = Boolean(feedback && current && feedback.cardId === current.id)
-  const currentAnswerPanelHtml = firstVisibleHtml(
+  const currentAnswerPanelHtml = richestVisibleHtml(
     editing ? editBackRef.current : '',
     editing ? editBack : '',
     feedbackForCurrent ? feedback.expectedHtml : '',
@@ -3963,7 +4000,10 @@ export default function App() {
     const reviewedAt = new Date(now).toISOString()
     const nextSchedule = scheduleByLearningLadder(card, grade, now)
     const isCorrectGrade = grade === 'good' || grade === 'easy'
-    const previousAttempts = Math.max(Number(card.reviewAttempts || 0), Number(card.siteReps || 0))
+    const previousSummary = reviewCountSummary(card)
+    const nextAttempts = previousSummary.attempts + 1
+    const nextCorrects = previousSummary.corrects + (isCorrectGrade ? 1 : 0)
+    const nextWrongs = previousSummary.wrongs + (isCorrectGrade ? 0 : 1)
     const learningHistory = Array.isArray(card.learningHistory) ? card.learningHistory : []
     const learningHistoryItem = {
       date: reviewedAt,
@@ -3980,10 +4020,10 @@ export default function App() {
       learningLevel: nextSchedule.level,
       learningHistory: [...learningHistory, learningHistoryItem].slice(-500),
       reps: Number(card.reps || 0),
-      siteReps: Number(card.siteReps || 0) + 1,
-      reviewAttempts: previousAttempts + 1,
-      reviewCorrect: Number(card.reviewCorrect || 0) + (isCorrectGrade ? 1 : 0),
-      reviewWrong: Number(card.reviewWrong || 0) + (isCorrectGrade ? 0 : 1),
+      siteReps: nextAttempts,
+      reviewAttempts: nextAttempts,
+      reviewCorrect: nextCorrects,
+      reviewWrong: nextWrongs,
       correctCount: Number(card.correctCount || 0) + (isCorrectGrade ? 1 : 0),
       reviewLevel: nextSchedule.level,
       stageProgress: nextSchedule.level,
@@ -5325,7 +5365,7 @@ export default function App() {
                 </div>
               )}
               <div className="card-top">
-                <span className="card-count">Card vencido {currentQueueNumber} de {dueCards.length}</span>
+                <span className="card-count">{currentPositionLabel}</span>
                 <span className={timeChallenge && !currentAlreadyAnswered ? `challenge-timer ${challengeLeft <= 10 ? 'urgent' : ''}` : 'timer-chip'}>
                   {timeChallenge && !currentAlreadyAnswered ? `${challengeLeft}s` : formatTime(cardSeconds)}
                 </span>

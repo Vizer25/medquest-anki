@@ -144,8 +144,7 @@ textarea{min-height:150px;resize:vertical}
 .answer-box{line-height:1.35;text-align:left}
 .answer-box p,.answer-box div,.answer-box li{margin:0 0 4px!important;line-height:1.35!important;white-space:normal!important;text-align:left!important}
 .answer-box p:last-child,.answer-box div:last-child{margin-bottom:0}
-.answer-box br + br{display:none}
-.answer-box > p:empty,.answer-box > div:empty,.answer-box > li:empty,.answer-box > p:has(> br:only-child),.answer-box > div:has(> br:only-child),.answer-box > li:has(> br:only-child){display:none}
+.answer-box p:empty::before,.answer-box div:empty::before,.answer-box li:empty::before{content:"\00a0"}
 .answer-panel .answer-box{max-height:310px;overflow:auto;background:transparent;border:0;border-radius:0;margin:0;padding:8px 10px}
 .answer-placeholder{height:100%;min-height:230px;background:white;border-radius:10px}
 .answer-panel .feedback.good{background:#d1fadf;border-color:#00c853;color:#05603a}
@@ -443,6 +442,10 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .library-answer-html div{
   margin:0 0 4px!important;
   line-height:1.35!important;
+}
+.library-answer-html p:empty::before,
+.library-answer-html div:empty::before{
+  content:"\00a0";
 }
 .library-answer-html p:last-child,
 .library-answer-html div:last-child{
