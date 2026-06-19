@@ -1222,21 +1222,32 @@ function buildStudyQueue(cards, seenIds, shouldPullUnseen, now = Date.now(), rec
 }
 
 function normalize(text) {
-  return String(text || '')
+  return normalizeHtmlWhitespaceEntities(text)
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
+function normalizeHtmlWhitespaceEntities(value) {
+  let out = String(value || '')
+  for (let i = 0; i < 4 && /&amp;/i.test(out); i += 1) {
+    const next = out.replace(/&amp;([a-z0-9#]+;)/gi, '&$1')
+    if (next === out) break
+    out = next
+  }
+  return out
+    .replace(/&(?:nbsp|#160|#xa0);/gi, ' ')
+    .replace(/\u00a0/g, ' ')
+}
+
 function stripHtml(text) {
   const div = document.createElement('div')
-  div.innerHTML = String(text || '')
-  return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim()
+  div.innerHTML = normalizeHtmlWhitespaceEntities(text)
+  return normalizeHtmlWhitespaceEntities(div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim()
 }
 
 function normalizeTagToken(value) {
@@ -1279,8 +1290,14 @@ function escapeHtml(value) {
 
 function decodeHtmlEntities(value) {
   const div = document.createElement('div')
-  div.innerHTML = String(value || '')
-  return div.textContent || div.innerText || ''
+  let out = normalizeHtmlWhitespaceEntities(value)
+  for (let i = 0; i < 3; i += 1) {
+    div.innerHTML = out
+    const next = normalizeHtmlWhitespaceEntities(div.textContent || div.innerText || '')
+    if (next === out) break
+    out = next
+  }
+  return out
 }
 
 function extractClozeText(raw) {
@@ -2239,7 +2256,8 @@ function shouldShowLibraryFrontPreview(card) {
 }
 
 function removeImageFallbackText(html) {
-  return String(html || '').replace(/<img\b[^>]*>/gi, tag => {
+  const cleanHtml = normalizeHtmlWhitespaceEntities(html)
+  return cleanHtml.replace(/<img\b[^>]*>/gi, tag => {
     let next = tag
       .replace(/\s+alt=(["'])[\s\S]*?\1/gi, '')
       .replace(/\s+title=(["'])[\s\S]*?\1/gi, '')
