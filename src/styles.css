@@ -603,6 +603,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
   margin-top:16px;
 }
 .library-pagination .load-more-button{margin:0}
+.library-pagination button{touch-action:manipulation}
 .library-pagination span{
   color:#667085;
   font-weight:900;

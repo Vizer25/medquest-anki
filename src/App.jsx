@@ -2820,6 +2820,7 @@ export default function App() {
   const editBackRef = useRef('')
   const libraryCardRefs = useRef(new Map())
   const librarySectionRef = useRef(null)
+  const suppressLogoutUntilRef = useRef(0)
   const [tab, setTab] = useState('study')
   const [siteSeconds, setSiteSeconds] = useState(0)
   const [cardSeconds, setCardSeconds] = useState(0)
@@ -3649,10 +3650,15 @@ export default function App() {
 
   function goToLibraryPage(nextIndex) {
     const boundedIndex = Math.min(Math.max(0, nextIndex), Math.max(0, libraryPageCount - 1))
+    suppressLogoutUntilRef.current = Date.now() + 1500
+    document.activeElement?.blur?.()
     setLibraryPageIndex(boundedIndex)
-    window.requestAnimationFrame(() => {
-      librarySectionRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' })
-    })
+    window.setTimeout(() => {
+      const target = librarySectionRef.current
+      if (!target) return
+      const targetTop = target.getBoundingClientRect().top + window.scrollY - 12
+      window.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' })
+    }, 120)
   }
 
   const statsPanel = (
@@ -3963,7 +3969,14 @@ export default function App() {
     }
   }
 
-  async function cloudLogout() {
+  async function cloudLogout(event) {
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    if (Date.now() < suppressLogoutUntilRef.current) {
+      setSyncStatus('Pagina trocada. Toque em Sair novamente se quiser encerrar a sessao.')
+      return
+    }
+
     if (user) {
       const queued = await readLocalSyncOutbox(localSyncOutboxKeyForUser(user)).catch(() => [])
       const hasPendingSync = syncInFlight || activeSyncCountRef.current > 0 || fullDeckSyncInFlightRef.current || drainingSyncOutbox.current || queued.length > 0
@@ -5291,7 +5304,7 @@ export default function App() {
             <input type="checkbox" checked={rememberLogin} onChange={e => setRememberLogin(e.target.checked)} />
             <span>Manter conectado neste dispositivo privado</span>
           </label>
-          <button onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
+          <button type="button" onClick={cloudEnter} disabled={authLoading}>{authLoading ? 'Entrando...' : 'Entrar'}</button>
           {feedback?.type === 'bad' && <div className="alert bad">{feedback.text}</div>}
           {feedback?.type === 'good' && <div className="alert good">{feedback.text}</div>}
         </section>
@@ -5310,7 +5323,7 @@ export default function App() {
             <span>{user?.email}</span>
             {syncStatus && <small>{syncStatus}</small>}
           </div>
-          <button onClick={cloudLogout}><LogOut size={20}/> Sair</button>
+          <button type="button" onClick={cloudLogout}><LogOut size={20}/> Sair</button>
         </div>
       </header>
       {importLog && (
@@ -5321,12 +5334,12 @@ export default function App() {
       )}
 
       <nav className="tabs">
-        <button className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setIndex(0); setTab('study') }}><Brain size={18}/> Estudar</button>
-        <button className={tab==='cards'?'active':''} onClick={()=>setTab('cards')}><Eye size={18}/> Ver flashcards</button>
-        <button className={tab==='import'?'active':''} onClick={()=>setTab('import')}><Upload size={18}/> Importar</button>
-        <button className={tab==='create'?'active':''} onClick={()=>setTab('create')}><Plus size={18}/> Criar card</button>
-        <button className={tab==='stats'?'active':''} onClick={()=>setTab('stats')}><BarChart3 size={18}/> Estatísticas</button>
-        <button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}><Settings size={18}/> Configurações</button>
+        <button type="button" className={tab==='study'?'active':''} onClick={() => { setFocusedCardIds([]); setIndex(0); setTab('study') }}><Brain size={18}/> Estudar</button>
+        <button type="button" className={tab==='cards'?'active':''} onClick={()=>setTab('cards')}><Eye size={18}/> Ver flashcards</button>
+        <button type="button" className={tab==='import'?'active':''} onClick={()=>setTab('import')}><Upload size={18}/> Importar</button>
+        <button type="button" className={tab==='create'?'active':''} onClick={()=>setTab('create')}><Plus size={18}/> Criar card</button>
+        <button type="button" className={tab==='stats'?'active':''} onClick={()=>setTab('stats')}><BarChart3 size={18}/> Estatísticas</button>
+        <button type="button" className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}><Settings size={18}/> Configurações</button>
       </nav>
 
       {tab !== 'study' && (
@@ -5629,7 +5642,11 @@ export default function App() {
                 type="button"
                 className="secondary"
                 disabled={safeLibraryPageIndex === 0}
-                onClick={() => goToLibraryPage(safeLibraryPageIndex - 1)}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  goToLibraryPage(safeLibraryPageIndex - 1)
+                }}
               >
                 Mostrar 500 anteriores
               </button>
@@ -5638,7 +5655,11 @@ export default function App() {
                 type="button"
                 className="secondary load-more-button"
                 disabled={safeLibraryPageIndex >= libraryPageCount - 1}
-                onClick={() => goToLibraryPage(safeLibraryPageIndex + 1)}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  goToLibraryPage(safeLibraryPageIndex + 1)
+                }}
               >
                 Mostrar proximos {Math.min(LIBRARY_PAGE_SIZE, filteredCards.length - libraryPageEnd)}
               </button>
